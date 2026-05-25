@@ -1,11 +1,12 @@
 #pragma once
 
-#include "recordlab_master/name_resolver.h"
+#include "recordlab_core/name_resolver.h"
 
 #include <chrono>
 #include <map>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -158,8 +159,22 @@ class RegistryStore {
 
   std::vector<RegistryEvent> registerType(const json &data) {
     std::lock_guard<std::mutex> lock(mu_);
-    types_[data.value("type_name", "")] = data;
-    return {{"type_added", data}};
+    json type = data;
+    const std::string type_name = type.value("type_name", "");
+    if (type_name.empty()) throw std::invalid_argument("type_name is required");
+    const std::string encoding = type.value("encoding", "json");
+    if (encoding != "json" && encoding != "raw" &&
+        encoding != "shm_ring_buffer" && encoding != "protobuf_reserved") {
+      throw std::invalid_argument("unsupported type encoding: " + encoding);
+    }
+    type["type_name"] = type_name;
+    type["version"] = type.value("version", "1");
+    type["encoding"] = encoding;
+    type["schema_hash"] = type.value("schema_hash", "");
+    type["schema_uri"] = type.value("schema_uri", "");
+    type["description"] = type.value("description", "");
+    types_[type_name] = type;
+    return {{"type_added", type}};
   }
   json lookupType(const std::string &type_name) const {
     std::lock_guard<std::mutex> lock(mu_);

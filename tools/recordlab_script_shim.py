@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import runpy
 import sys
 import traceback
@@ -19,21 +20,6 @@ PREFIX = "RECORDLAB_EVENT_JSON "
 
 def emit(payload: dict) -> None:
     print(PREFIX + json.dumps(payload, ensure_ascii=False), flush=True)
-
-
-class _WorkflowQueue:
-    def put_nowait(self, payload):
-        if isinstance(payload, dict):
-            emit(payload)
-
-
-def bind_old_workflow() -> None:
-    try:
-        from flowagent.core.script_workflow import SimpleScriptWorkflow, bind_workflow
-
-        bind_workflow(SimpleScriptWorkflow(_WorkflowQueue()))
-    except Exception as exc:
-        emit({"type": "log", "stream": "stderr", "message": f"workflow绑定失败: {exc}"})
 
 
 def main() -> int:
@@ -48,11 +34,11 @@ def main() -> int:
         return 2
 
     sys.path.insert(0, str(script_path.parent))
-    legacy_root = Path("/home/hyren/RecordLab")
-    if legacy_root.exists():
-        sys.path.insert(0, str(legacy_root))
-
-    bind_old_workflow()
+    legacy_root_env = os.environ.get("RECORDLAB_LEGACY_ROOT", "").strip()
+    if legacy_root_env:
+        legacy_root = Path(legacy_root_env)
+        if legacy_root.exists():
+            sys.path.insert(0, str(legacy_root))
 
     def trace(frame, event, arg):
         if event == "line" and Path(frame.f_code.co_filename).resolve() == script_path:

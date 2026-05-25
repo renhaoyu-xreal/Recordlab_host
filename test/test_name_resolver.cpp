@@ -1,4 +1,4 @@
-#include "recordlab_master/name_resolver.h"
+#include "recordlab_core/name_resolver.h"
 #include <cassert>
 #include <map>
 

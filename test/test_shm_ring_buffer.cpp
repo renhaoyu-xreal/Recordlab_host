@@ -1,4 +1,4 @@
-#include "recordlab_master/shm_ring_buffer.h"
+#include "recordlab_echo/shm_ring_buffer.h"
 #include <cassert>
 
 int main() {

@@ -1,4 +1,4 @@
-#include "recordlab_master/master_client.h"
+#include "recordlab_core/master_client.h"
 
 #include <iostream>
 

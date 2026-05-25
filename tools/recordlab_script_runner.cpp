@@ -1,4 +1,5 @@
-#include "recordlab_master/script_runner.h"
+#include "recordlab_core/script_runner.h"
+#include "recordlab_core/logger.h"
 
 #include <chrono>
 #include <iostream>
@@ -6,6 +7,7 @@
 #include <thread>
 
 int main(int argc, char **argv) {
+  recordlab::setLogComponent("recordlab_script_runner");
   std::string master_endpoint = "tcp://127.0.0.1:5590";
   if (argc >= 3 && std::string(argv[1]) == "--master") {
     master_endpoint = argv[2];

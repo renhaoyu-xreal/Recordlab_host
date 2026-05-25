@@ -1,7 +1,7 @@
-#include "recordlab_master/master_client.h"
+#include "recordlab_core/master_client.h"
 #include "recordlab_master/master_server.h"
-#include "recordlab_master/script_runner.h"
-#include "recordlab_master/transport.h"
+#include "recordlab_core/script_runner.h"
+#include "recordlab_echo/echo.h"
 
 #include <cassert>
 #include <chrono>
@@ -35,12 +35,22 @@ int main() {
   assert(status_topic["data"][0]["transport"].contains("endpoint"));
 
   bool saw_log = false;
+  bool saw_user_log = false;
   bool saw_workflow = false;
   recordlab::Subscriber log_sub(
       client.lookupTopic("/script_runner/log")["data"][0]["transport"]["endpoint"],
       "/script_runner/log",
       [&saw_log](const recordlab::json &msg) {
         if (msg.value("message", "").find("hello from script") != std::string::npos) saw_log = true;
+      });
+  recordlab::Subscriber user_log_sub(
+      client.lookupTopic("/recordlab/user_log")["data"][0]["transport"]["endpoint"],
+      "/recordlab/user_log",
+      [&saw_user_log](const recordlab::json &msg) {
+        if (msg.value("level", "") == "INFO" &&
+            msg.value("message", "").find("hello from script") != std::string::npos) {
+          saw_user_log = true;
+        }
       });
   recordlab::Subscriber workflow_sub(
       client.lookupTopic("/script_runner/workflow")["data"][0]["transport"]["endpoint"],
@@ -57,10 +67,11 @@ int main() {
   assert(result["ok"] == true);
   assert(result["data"]["success"] == true);
 
-  for (int i = 0; i < 50 && (!saw_log || !saw_workflow); ++i) {
+  for (int i = 0; i < 50 && (!saw_log || !saw_user_log || !saw_workflow); ++i) {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
   assert(saw_log);
+  assert(saw_user_log);
   assert(saw_workflow);
 
   auto stop = client.lookupService("/script_runner/stop_script");

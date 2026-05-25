@@ -1,0 +1,82 @@
+{
+  "version": "v1",
+  "devices": [
+    {
+      "vid": "0x3318",
+      "pid": "0x0420",
+      "names": ["Air", "P55", "Flora"],
+      "display_name": "Air/P55/Flora",
+      "access_mode": "bsp_sdk"
+    },
+    {
+      "vid": "0x0000",
+      "pid": "0x1012",
+      "name": "Ada",
+      "display_name": "Ada",
+      "access_mode": "bsp_sdk"
+    },
+    {
+      "vid": "0x3318",
+      "pid": "0x0433",
+      "name": "Charlie",
+      "display_name": "Charlie",
+      "access_mode": "bsp_sdk"
+    },
+    {
+      "vid": "0x3318",
+      "pid": "0x0434",
+      "name": "CORE",
+      "display_name": "CORE",
+      "access_mode": "bsp_sdk"
+    },
+    {
+      "vid": "0x3318",
+      "pid": "0x0436",
+      "name": "Gina",
+      "display_name": "Gina",
+      "access_mode": "bsp_sdk"
+    },
+    {
+      "vid": "0x3318",
+      "pid": "0x0438",
+      "name": "GF",
+      "display_name": "GF",
+      "access_mode": "bsp_sdk"
+    },
+    {
+      "vid": "0x3318",
+      "pid": "0x043a",
+      "name": "Hylla",
+      "display_name": "Hylla",
+      "access_mode": "bsp_sdk"
+    },
+    {
+      "vid": "0x3318",
+      "pid": "0x043c",
+      "name": "Core Pro",
+      "display_name": "Core Pro",
+      "access_mode": "bsp_sdk"
+    },
+    {
+      "vid": "0x3318",
+      "pid": "0x043e",
+      "name": "GS",
+      "display_name": "GS",
+      "access_mode": "bsp_sdk"
+    },
+    {
+      "vid": "0x0b05",
+      "pid": "0x1d9d",
+      "name": "Glory",
+      "display_name": "Glory",
+      "access_mode": "bsp_sdk"
+    },
+    {
+      "vid": "0x3318",
+      "pid": "0x0440",
+      "names": ["Helen", "Helen Pro"],
+      "display_name": "Helen/Helen Pro",
+      "access_mode": "bsp_sdk"
+    }
+  ]
+}
