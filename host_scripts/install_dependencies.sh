@@ -19,18 +19,39 @@ install_apt_packages() {
   fi
 
   local missing=()
+  local python_pkg="${PYTHON_BIN}"
+  local python_venv_pkg="${PYTHON_BIN}-venv"
+  local python_dev_pkg="${PYTHON_BIN}-dev"
   for cmd in git cmake pkg-config g++; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
       missing+=("${cmd}")
     fi
   done
 
-  if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-    missing+=("${PYTHON_BIN}" "${PYTHON_BIN}-venv" "${PYTHON_BIN}-dev")
+  if [[ "${PYTHON_BIN}" == */* ]]; then
+    python_pkg=""
+    python_venv_pkg=""
+    python_dev_pkg=""
+  fi
+
+  if [[ -n "${python_pkg}" ]] && ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+    missing+=("${python_pkg}")
+  fi
+
+  if [[ -n "${python_venv_pkg}" ]] && ! dpkg -s "${python_venv_pkg}" >/dev/null 2>&1; then
+    missing+=("${python_venv_pkg}")
+  fi
+
+  if [[ -n "${python_dev_pkg}" ]] && ! dpkg -s "${python_dev_pkg}" >/dev/null 2>&1; then
+    missing+=("${python_dev_pkg}")
   fi
 
   if ! dpkg -s qt6-base-dev >/dev/null 2>&1; then
     missing+=("qt6-base-dev")
+  fi
+
+  if ! dpkg -s python3-pip >/dev/null 2>&1; then
+    missing+=("python3-pip")
   fi
 
   if ((${#missing[@]} == 0)); then
@@ -39,8 +60,7 @@ install_apt_packages() {
 
   echo "[recordlab] installing system packages: ${missing[*]}"
   sudo apt-get update
-  sudo apt-get install -y git cmake build-essential pkg-config qt6-base-dev \
-    "${PYTHON_BIN}" "${PYTHON_BIN}-venv" "${PYTHON_BIN}-dev" python3-pip
+  sudo apt-get install -y "${missing[@]}"
 }
 
 clone_or_update() {
@@ -69,9 +89,24 @@ if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ -d "${VENV_DIR}" ]] && {
+  [[ ! -f "${VENV_DIR}/pyvenv.cfg" ]] ||
+  [[ ! -x "${VENV_DIR}/bin/python" ]] ||
+  ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1
+}; then
+  echo "[recordlab] removing incomplete venv: ${VENV_DIR}"
+  rm -rf "${VENV_DIR}"
+fi
+
 if [[ ! -d "${VENV_DIR}" ]]; then
   echo "[recordlab] creating Python 3.10 venv: ${VENV_DIR}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+  if ! "${PYTHON_BIN}" -m venv "${VENV_DIR}"; then
+    echo "[recordlab] failed to create venv with ${PYTHON_BIN}." >&2
+    if command -v apt-get >/dev/null 2>&1 && [[ "${PYTHON_BIN}" != */* ]]; then
+      echo "[recordlab] try: sudo apt-get install -y ${PYTHON_BIN}-venv" >&2
+    fi
+    exit 1
+  fi
 fi
 
 RECORDLAB_PYTHON_BIN="${VENV_DIR}/bin/python"
