@@ -11,6 +11,15 @@ cd Recordlab_host/host_scripts
 ./start_recordlab.sh
 ```
 
+Open all repositories in VS Code:
+
+```bash
+code RecordLab.code-workspace
+```
+
+Run `./install_dependencies.sh` first so the `third_party/Recordlab_nodes` and
+`third_party/echo_message_system` folders exist.
+
 The installer clones these repositories into `third_party/`:
 
 ```text
