@@ -1,8 +1,12 @@
 #pragma once
 
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <memory>
 #include <string>
 
+#include <action.h>
 #include <nlohmann/json.hpp>
 
 namespace recordlab::host {
@@ -26,17 +30,11 @@ public:
     ActionResult sendCommand(const std::string& cmd, const nlohmann::json& params, int timeout_ms = 5000);
 
 private:
-    void* context_ = nullptr;
-    void* goal_socket_ = nullptr;
-    void* feedback_socket_ = nullptr;
+    std::unique_ptr<echo::ActionClient> client_;
     std::string host_;
     int goal_port_;
     int feedback_port_;
     int timeout_ms_;
-    unsigned long long next_goal_id_ = 1;
-
-    nlohmann::json callGoalSocket(const nlohmann::json& request);
-    ActionResult waitForResult(const std::string& goal_id, int timeout_ms);
 };
 
 }  // namespace recordlab::host

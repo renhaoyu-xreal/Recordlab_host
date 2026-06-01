@@ -24,6 +24,7 @@ struct AgentConfig {
     nlohmann::json init_device_params = nlohmann::json::object();
     double init_device_pause_duration = 0.0;
     std::vector<TopicConfig> topics;
+    std::vector<std::string> default_scripts;
     nlohmann::json custom_params = nlohmann::json::object();
 };
 

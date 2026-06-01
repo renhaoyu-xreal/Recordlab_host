@@ -1,7 +1,13 @@
 build/
 logs/
+third_party/Recordlab_nodes/
+third_party/echo_message_system/
+third_party/Recordlab_nodes
+third_party/echo_message_system
 *.o
 *.a
 *.so
+*.pyc
+__pycache__/
 CTestTestfile.cmake
 Testing/

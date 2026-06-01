@@ -1,8 +1,10 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <string>
 
+#include <subscriber.h>
 #include <nlohmann/json.hpp>
 
 namespace recordlab::host {
@@ -20,8 +22,7 @@ public:
     bool pollOnce(int timeout_ms);
 
 private:
-    void* context_ = nullptr;
-    void* socket_ = nullptr;
+    std::unique_ptr<echo::Subscriber> subscriber_;
     std::string topic_;
     Callback callback_;
 };

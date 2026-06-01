@@ -25,6 +25,10 @@ public:
     void registerConsumer(const std::string& target);
     void publish(HostMessage message);
     std::optional<HostMessage> waitFor(const std::string& target, int timeout_ms);
+
+    /// Non-blocking: drain up to max_count pending messages for the given target.
+    std::vector<HostMessage> drainFor(const std::string& target, int max_count = 256);
+
     std::size_t queueSize(const std::string& target) const;
 
 private:

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HOST_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+THIRD_PARTY_ROOT="${HOST_ROOT}/third_party"
+ECHO_ROOT="${ECHO_MESSAGE_SYSTEM_ROOT:-${THIRD_PARTY_ROOT}/echo_message_system}"
+NODES_ROOT="${RECORDLAB_NODES_ROOT:-${THIRD_PARTY_ROOT}/Recordlab_nodes}"
+AGENTS_CONFIG="${RECORDLAB_AGENTS_CONFIG:-${NODES_ROOT}/config/agents_config.json}"
+APP_BIN="${HOST_ROOT}/build/recordlab_master_app"
+VENV_DIR="${RECORDLAB_VENV_DIR:-${HOST_ROOT}/.venv-py310}"
+
+if [[ -x "${VENV_DIR}/bin/python" ]]; then
+  export RECORDLAB_PYTHON_BIN="${RECORDLAB_PYTHON_BIN:-${VENV_DIR}/bin/python}"
+else
+  export RECORDLAB_PYTHON_BIN="${RECORDLAB_PYTHON_BIN:-python3.10}"
+fi
+
+export RECORDLAB_NODES_ROOT="${NODES_ROOT}"
+export ECHO_MESSAGE_SYSTEM_ROOT="${ECHO_ROOT}"
+export ECHO_MESSAGE_SYSTEM_PYTHON_ROOT="${ECHO_ROOT}/python"
+export PYTHONPATH="${NODES_ROOT}:${ECHO_MESSAGE_SYSTEM_PYTHON_ROOT}:${PYTHONPATH:-}"
+
+require_path() {
+  local path="$1"
+  local message="$2"
+  if [[ ! -e "${path}" ]]; then
+    echo "[recordlab] missing ${message}: ${path}" >&2
+    echo "[recordlab] run host_scripts/install_dependencies.sh first" >&2
+    exit 1
+  fi
+}
+
+require_path "${NODES_ROOT}/recordlab_nodes/core/node_runtime.py" "Recordlab_nodes runtime"
+require_path "${ECHO_MESSAGE_SYSTEM_PYTHON_ROOT}/message_system" "echo_message_system Python package"
+require_path "${AGENTS_CONFIG}" "agents_config.json"
+
+if ! "${RECORDLAB_PYTHON_BIN}" -c "import recordlab_nodes, message_system" >/dev/null 2>&1; then
+  echo "[recordlab] Python dependencies are not installed in ${RECORDLAB_PYTHON_BIN}" >&2
+  echo "[recordlab] run host_scripts/install_dependencies.sh first" >&2
+  exit 1
+fi
+
+if [[ ! -x "${APP_BIN}" ]]; then
+  echo "[recordlab] host app is not built; building now"
+  cmake -S "${HOST_ROOT}" -B "${HOST_ROOT}/build" \
+    -DRECORDLAB_THIRD_PARTY_DIR="${THIRD_PARTY_ROOT}" \
+    -DECHO_MESSAGE_SYSTEM_ROOT="${ECHO_ROOT}"
+  cmake --build "${HOST_ROOT}/build" -j"$(nproc)"
+fi
+
+echo "[recordlab] cleaning old RecordLab processes"
+pkill -f "recordlab_master_app" 2>/dev/null || true
+pkill -f "recordlab_nodes.core.node_runtime" 2>/dev/null || true
+
+echo "[recordlab] starting UI"
+exec "${APP_BIN}" "${AGENTS_CONFIG}"

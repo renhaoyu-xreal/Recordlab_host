@@ -35,6 +35,9 @@ AgentConfig AgentConfigLoader::loadAgent(const std::string& agent_name) const {
     cfg.init_device_params = item.value("init_device_params", nlohmann::json::object());
     cfg.init_device_pause_duration = item.value("init_device_pause_duration", 0.0);
     cfg.custom_params = item.value("custom_params", nlohmann::json::object());
+    for (const auto& script : item.value("default_scripts", nlohmann::json::array())) {
+        cfg.default_scripts.push_back(script.get<std::string>());
+    }
     for (const auto& topic : item.value("topics", nlohmann::json::array())) {
         cfg.topics.push_back(TopicConfig{
             topic.at("name").get<std::string>(),

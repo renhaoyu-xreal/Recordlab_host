@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -17,6 +18,18 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+
+fs::path hostRoot() {
+    const auto cwd = fs::current_path();
+    return cwd.filename() == "build" ? cwd.parent_path() : cwd;
+}
+
+std::string envOrDefault(const char* name, const fs::path& fallback) {
+    if (const char* value = std::getenv(name)) {
+        return value;
+    }
+    return fallback.string();
+}
 
 int freePort() {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -86,9 +99,13 @@ int main() {
     cfg.close();
 
     recordlab::host::ProcessHandle node;
-    const std::string py_path = "/home/hyren/Recordlab_nodes:/home/hyren/echo_message_system/python";
-    node.start({"python3", "-m", "recordlab_nodes.core.node_runtime", "--config", config.string(), "--agent", "imu_cpp"},
-               "/home/hyren/Recordlab_nodes",
+    const fs::path root = hostRoot();
+    const std::string nodes_root = envOrDefault("RECORDLAB_NODES_ROOT", root / "third_party" / "Recordlab_nodes");
+    const std::string echo_python_root = envOrDefault("ECHO_MESSAGE_SYSTEM_PYTHON_ROOT", root / "third_party" / "echo_message_system" / "python");
+    const std::string python_bin = envOrDefault("RECORDLAB_PYTHON_BIN", "python3.10");
+    const std::string py_path = nodes_root + ":" + echo_python_root;
+    node.start({python_bin, "-m", "recordlab_nodes.core.node_runtime", "--config", config.string(), "--agent", "imu_cpp"},
+               nodes_root,
                py_path);
 
     try {

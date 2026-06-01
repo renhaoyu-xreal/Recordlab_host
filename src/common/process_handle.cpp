@@ -1,6 +1,7 @@
 #include "recordlab_host/common/process_handle.h"
 
 #include <csignal>
+#include <fcntl.h>
 #include <stdexcept>
 #include <sys/wait.h>
 #include <thread>
@@ -23,6 +24,15 @@ void ProcessHandle::start(const std::vector<std::string>& args,
         throw std::runtime_error("fork failed");
     }
     if (pid_ == 0) {
+        int dev_null = open("/dev/null", O_RDWR);
+        if (dev_null >= 0) {
+            dup2(dev_null, STDIN_FILENO);
+            dup2(dev_null, STDOUT_FILENO);
+            dup2(dev_null, STDERR_FILENO);
+            if (dev_null > STDERR_FILENO) {
+                close(dev_null);
+            }
+        }
         if (!cwd.empty()) {
             chdir(cwd.c_str());
         }
@@ -45,7 +55,10 @@ void ProcessHandle::terminate() {
         return;
     }
     kill(pid_, SIGTERM);
-    wait(3000);
+    if (wait(3000) == -1 && pid_ > 0) {
+        kill(pid_, SIGKILL);
+        wait(1000);
+    }
     pid_ = -1;
 }
 
