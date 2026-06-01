@@ -1,37 +1,97 @@
 # Recordlab_host
 
-C++ Host infrastructure for the RecordLab refactor MVP.
+RecordLab 的主程序仓库，负责启动 UI、管理 Agent、调用脚本、接收数据并和 `echo_message_system` 通信。
 
-Quick start:
+## 首次安装
 
 ```bash
 git clone https://github.com/renhaoyu-xreal/Recordlab_host.git
 cd Recordlab_host/host_scripts
 ./install_dependencies.sh
+```
+
+安装脚本会自动完成这些事情：
+
+- 克隆 `echo_message_system` 到 `third_party/echo_message_system`
+- 克隆 `Recordlab_nodes` 到 `third_party/Recordlab_nodes`
+- 检查并安装系统依赖，包括 Python 3.10、Python venv、CMake、Qt6 等
+- 创建 `.venv-py310`
+- 安装 `recordlab_host`、`echo_message_system`、`Recordlab_nodes` 需要的 Python 依赖
+- 安装 `third_party/xreal_glasses/xreal_glasses-0.4.3-py3-none-any.whl`
+- 编译 C++ host 程序
+
+## 启动软件
+
+```bash
+cd Recordlab_host/host_scripts
 ./start_recordlab.sh
 ```
 
-Open all repositories in VS Code:
+启动脚本会先校验依赖，清理之前残留的 RecordLab 进程，然后打开 UI。
+
+## 更新代码
+
+如果用户只克隆了 `Recordlab_host`，推荐直接重新运行安装脚本。它会更新 `third_party` 下的依赖仓库，并重新安装依赖、重新编译：
 
 ```bash
+cd Recordlab_host
+git pull
+
+cd host_scripts
+./install_dependencies.sh
+```
+
+也可以手动分别更新三个仓库：
+
+```bash
+cd Recordlab_host
+git pull
+
+cd third_party/Recordlab_nodes
+git pull
+
+cd ../echo_message_system
+git pull
+```
+
+手动更新后仍建议重新运行：
+
+```bash
+cd Recordlab_host/host_scripts
+./install_dependencies.sh
+```
+
+## VSCode 查看多个 Git 仓库
+
+先运行过安装脚本，确保下面两个目录已经存在：
+
+```text
+third_party/Recordlab_nodes
+third_party/echo_message_system
+```
+
+然后用 workspace 打开：
+
+```bash
+cd Recordlab_host
 code RecordLab.code-workspace
 ```
 
-Run `./install_dependencies.sh` first so the `third_party/Recordlab_nodes` and
-`third_party/echo_message_system` folders exist.
+这样 VSCode 的 Source Control 面板会同时显示三个 Git 仓库：
 
-The installer clones these repositories into `third_party/`:
+- `Recordlab_host`
+- `Recordlab_nodes`
+- `echo_message_system`
 
-```text
-third_party/echo_message_system
-third_party/Recordlab_nodes
-```
+## 脚本执行
 
-It also creates `.venv-py310`, installs the Python packages with Python 3.10,
-installs `third_party/xreal_glasses/xreal_glasses-0.4.3-py3-none-any.whl`, and
-builds the C++ host.
+软件运行时，脚本功能会使用 `third_party/Recordlab_nodes/node_scripts` 下的脚本。
 
-Manual build:
+`third_party/Recordlab_nodes/config/agents_config.json` 里可以为每个主 Agent 配置 `default_scripts`，用于节省用户手动导入脚本的时间。
+
+## 手动构建和测试
+
+一般用户不需要手动执行这些命令，开发调试时可以使用：
 
 ```bash
 cmake -S . -B build
