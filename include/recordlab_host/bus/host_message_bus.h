@@ -1,0 +1,36 @@
+#pragma once
+
+#include <condition_variable>
+#include <deque>
+#include <map>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
+namespace recordlab::host {
+
+struct HostMessage {
+    std::string request_id;
+    std::string source;
+    std::string target;
+    std::string type;
+    nlohmann::json payload = nlohmann::json::object();
+};
+
+class HostMessageBus {
+public:
+    void registerConsumer(const std::string& target);
+    void publish(HostMessage message);
+    std::optional<HostMessage> waitFor(const std::string& target, int timeout_ms);
+    std::size_t queueSize(const std::string& target) const;
+
+private:
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::map<std::string, std::deque<HostMessage>> queues_;
+};
+
+}  // namespace recordlab::host
