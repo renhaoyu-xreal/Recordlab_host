@@ -128,11 +128,18 @@ void AgentManager::doShutdownAgent() {
         node_process_->terminate();
         node_process_.reset();
     }
+    node_process_agent_.clear();
     active_agent_.clear();
 }
 
 void AgentManager::startNodeProcess(const AgentConfig& config) {
-    if (node_process_ && node_process_->pid() > 0) return;
+    if (node_process_ && node_process_->pid() > 0 && node_process_agent_ == config.name) return;
+    if (node_process_) {
+        action_client_.reset();
+        node_process_->terminate();
+        node_process_.reset();
+        node_process_agent_.clear();
+    }
     node_process_ = std::make_unique<ProcessHandle>();
     const std::string pythonpath = nodes_root_ + ":" + echo_python_root_;
     const char* python_bin_env = std::getenv("RECORDLAB_PYTHON_BIN");
@@ -141,6 +148,7 @@ void AgentManager::startNodeProcess(const AgentConfig& config) {
         {python_bin, "-m", "recordlab_nodes.core.node_runtime",
          "--config", agents_config_path_, "--agent", config.name},
         nodes_root_, pythonpath);
+    node_process_agent_ = config.name;
     publishToUI(msg::LOG_ENTRY, {{"message", "node_runtime pid=" + std::to_string(node_process_->pid())}});
 }
 

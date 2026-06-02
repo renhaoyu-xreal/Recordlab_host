@@ -30,6 +30,17 @@ int main() {
     assert(agent.node_class.find("ImuSimNode") != std::string::npos);
     assert(agent.goal_port == 5690);
     assert(!agent.topics.empty());
+    auto bsp = loader.loadAgent("glasses_bsp_node");
+    assert(bsp.name == "glasses_bsp_node");
+    assert(bsp.node_class.find("BspMainNode") != std::string::npos);
+    assert(!bsp.default_scripts.empty());
+    bool has_camera = false;
+    for (const auto& topic : bsp.topics) {
+        if (topic.name == "camera_data" && topic.encoding == "json_binary") {
+            has_camera = true;
+        }
+    }
+    assert(has_camera);
     std::cout << "agent config loader ok\n";
     return 0;
 }

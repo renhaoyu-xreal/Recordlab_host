@@ -4,14 +4,14 @@
       "name": "Recordlab_host",
       "path": "."
     },
-  //   {
-  //     "name": "Recordlab_nodes",
-  //     "path": "third_party/Recordlab_nodes"
-  //   },
-  //   {
-  //     "name": "echo_message_system",
-  //     "path": "third_party/echo_message_system"
-  //   }
+    {
+      "name": "Recordlab_nodes",
+      "path": "third_party/Recordlab_nodes"
+    },
+    {
+      "name": "echo_message_system",
+      "path": "third_party/echo_message_system"
+    }
   ],
   "settings": {
     "git.autoRepositoryDetection": "subFolders",

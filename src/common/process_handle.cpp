@@ -1,13 +1,53 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "recordlab_host/common/process_handle.h"
 
 #include <csignal>
+#include <cstring>
 #include <fcntl.h>
+#include <spawn.h>
 #include <stdexcept>
+#include <string>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <utility>
+#include <vector>
+
+extern char** environ;
 
 namespace recordlab::host {
+namespace {
+
+std::vector<std::string> buildEnvironment(const std::string& pythonpath) {
+    std::vector<std::string> env;
+    const std::string key = "PYTHONPATH=";
+    bool found_pythonpath = false;
+
+    for (char** current = environ; current != nullptr && *current != nullptr; ++current) {
+        std::string entry(*current);
+        if (entry.rfind(key, 0) == 0) {
+            found_pythonpath = true;
+            if (!pythonpath.empty()) {
+                entry = key + pythonpath;
+            }
+        }
+        env.push_back(std::move(entry));
+    }
+
+    if (!pythonpath.empty() && !found_pythonpath) {
+        env.push_back(key + pythonpath);
+    }
+    return env;
+}
+
+std::runtime_error spawnError(const char* action, int error_code) {
+    return std::runtime_error(std::string(action) + " failed: " + std::strerror(error_code));
+}
+
+}  // namespace
 
 ProcessHandle::~ProcessHandle() {
     terminate();
@@ -19,35 +59,59 @@ void ProcessHandle::start(const std::vector<std::string>& args,
     if (args.empty()) {
         throw std::runtime_error("Process args cannot be empty");
     }
-    pid_ = fork();
-    if (pid_ < 0) {
-        throw std::runtime_error("fork failed");
+
+    posix_spawn_file_actions_t file_actions;
+    int rc = posix_spawn_file_actions_init(&file_actions);
+    if (rc != 0) {
+        throw spawnError("posix_spawn_file_actions_init", rc);
     }
-    if (pid_ == 0) {
-        int dev_null = open("/dev/null", O_RDWR);
-        if (dev_null >= 0) {
-            dup2(dev_null, STDIN_FILENO);
-            dup2(dev_null, STDOUT_FILENO);
-            dup2(dev_null, STDERR_FILENO);
-            if (dev_null > STDERR_FILENO) {
-                close(dev_null);
-            }
+
+    auto cleanup = [&file_actions]() {
+        posix_spawn_file_actions_destroy(&file_actions);
+    };
+    auto add_action = [&](int error_code, const char* action) {
+        if (error_code != 0) {
+            cleanup();
+            throw spawnError(action, error_code);
         }
-        if (!cwd.empty()) {
-            chdir(cwd.c_str());
-        }
-        if (!pythonpath.empty()) {
-            setenv("PYTHONPATH", pythonpath.c_str(), 1);
-        }
-        std::vector<char*> argv;
-        argv.reserve(args.size() + 1);
-        for (const auto& arg : args) {
-            argv.push_back(const_cast<char*>(arg.c_str()));
-        }
-        argv.push_back(nullptr);
-        execvp(argv[0], argv.data());
-        _exit(127);
+    };
+
+    add_action(posix_spawn_file_actions_addopen(
+                   &file_actions, STDIN_FILENO, "/dev/null", O_RDWR, 0),
+               "posix_spawn_file_actions_addopen");
+    add_action(posix_spawn_file_actions_adddup2(
+                   &file_actions, STDIN_FILENO, STDOUT_FILENO),
+               "posix_spawn_file_actions_adddup2 stdout");
+    add_action(posix_spawn_file_actions_adddup2(
+                   &file_actions, STDIN_FILENO, STDERR_FILENO),
+               "posix_spawn_file_actions_adddup2 stderr");
+    if (!cwd.empty()) {
+        add_action(posix_spawn_file_actions_addchdir_np(&file_actions, cwd.c_str()),
+                   "posix_spawn_file_actions_addchdir_np");
     }
+
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto& arg : args) {
+        argv.push_back(const_cast<char*>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    std::vector<std::string> env_storage = buildEnvironment(pythonpath);
+    std::vector<char*> envp;
+    envp.reserve(env_storage.size() + 1);
+    for (auto& entry : env_storage) {
+        envp.push_back(entry.data());
+    }
+    envp.push_back(nullptr);
+
+    pid_t child_pid = -1;
+    rc = posix_spawnp(&child_pid, argv[0], &file_actions, nullptr, argv.data(), envp.data());
+    cleanup();
+    if (rc != 0) {
+        throw spawnError("posix_spawnp", rc);
+    }
+    pid_ = child_pid;
 }
 
 void ProcessHandle::terminate() {

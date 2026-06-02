@@ -52,6 +52,7 @@ private:
     std::unique_ptr<ProcessHandle> node_process_;
     std::unique_ptr<EchoActionClient> action_client_;
     std::string active_agent_;
+    std::string node_process_agent_;
 
     std::thread worker_;
     std::atomic<bool> running_{false};

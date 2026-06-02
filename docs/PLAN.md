@@ -516,12 +516,16 @@ Host 单元测试：
 
 已完成 ：
 
-- 
+- `imu_simulation` node MVP、Host UI 基础链路。
+- BSP 主节点迁移到 Nodes 仓库方向已落地：`glasses_bsp_node` 作为 Python business node，经通用 `node_runtime` 启动；BSP 相关脚本入口迁入 `node_scripts/`。BSP RGB 底层能力未作为本轮主链路迁移，相关脚本入口保留并明确返回未迁移状态。
 
 执行中发现并修正的问题：
 
 - 当前 `echo_message_system` C++ 高层 API 与 Python 高层 API 原本不完全跨语言兼容。已按新的执行方向修改中间件 C++ 版本，而不是在 Host 仓库保留私有协议实现。
 - 快速命令 result 可能遇到 ZMQ PUB/SUB slow-joiner 风险。高概率场景是 client 刚启动 result/feedback 订阅后立刻发送毫秒级返回的 `check/init_device` 等命令；正常运行中订阅已稳定，或命令本身耗时较长时概率较低。中间件层可以通过订阅 ready handshake、result 改为 REQ/REP、ack 后发布、短期 result buffer 等方式彻底解决。当前第一版只记录该风险，测试中在 client `start_listening()` 后增加启动稳定等待，不在 node runtime 里加入业务延迟。
+- BSP 使用的 XREAL SDK 是 Python Qt/QObject 实现。修正方案不是改 Host，也不是让 BSP 拥有独立 main 入口，而是在 Python Nodes 通用 `node_runtime` 增加节点声明式 Qt 事件循环能力：具体 node class 可声明 `requires_qt_event_loop = True`，runtime 在实例化 node 前创建 `QCoreApplication` 并用 Qt event loop 承载 SDK 信号。Host 仍只启动 `python -m recordlab_nodes.core.node_runtime --config ... --agent ...`，不知道 Qt/XREAL/BSP。
+- Host 早期 `EchoTopicSubscriber` 只按 JSON parse topic payload，不适合 BSP camera 等二进制/图像 topic。修正方案不是把 BSP 图像流降级成只有元数据的“假 JSON”，而是在中间件/Host 适配层支持 topic `encoding`：Python `echo_message_system` 增加 `json_binary` 编码，允许结构化 JSON 中携带 bytes；Host `EchoTopicSubscriber` 和 `DataReceiver` 按 `agents_config.json` 的 topic encoding 订阅和解析。
+- Host `AgentManager` 早期只适配单一 node 进程，切换 primary agent 时如果已有进程会复用旧进程，导致 `imu_simulation` 和 `glasses_bsp_node` 不能按配置切换。已修正为按 agent name 管理当前 node 进程，切换 agent 时停止旧进程、重置 ActionClient、启动目标 node runtime。
 
 下一批测试目标：
 

@@ -28,7 +28,7 @@ void DataReceiver::subscribe(const std::string& host, const std::vector<TopicCon
 
     for (const auto& topic : topics) {
         subscribers_.push_back(std::make_unique<EchoTopicSubscriber>(
-            host, topic.port, topic.name,
+            host, topic.port, topic.name, topic.encoding,
             [this, name = topic.name](const nlohmann::json& value) {
                 onTopicData(name, value);
             }));

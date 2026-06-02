@@ -6,11 +6,23 @@
 namespace recordlab::host {
 
 EchoTopicSubscriber::EchoTopicSubscriber(std::string host, int port, std::string topic, Callback callback)
-    : topic_(std::move(topic)), callback_(std::move(callback)) {
+    : EchoTopicSubscriber(std::move(host), port, std::move(topic), "json", std::move(callback)) {}
+
+EchoTopicSubscriber::EchoTopicSubscriber(std::string host, int port, std::string topic, std::string encoding, Callback callback)
+    : topic_(std::move(topic)), encoding_(std::move(encoding)), callback_(std::move(callback)) {
     subscriber_ = std::make_unique<echo::Subscriber>(
         topic_, host, port,
         [this](const std::string& payload) {
-            callback_(nlohmann::json::parse(payload));
+            if (encoding_ == "json" || encoding_ == "json_binary" || encoding_.empty()) {
+                callback_(nlohmann::json::parse(payload));
+                return;
+            }
+            callback_(nlohmann::json{
+                {"encoding", encoding_},
+                {"raw_size", payload.size()},
+                {"payload_kind", "raw"},
+                {"message", "non-json topic payload received"},
+            });
         },
         true);
 }

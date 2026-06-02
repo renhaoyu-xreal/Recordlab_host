@@ -6,7 +6,7 @@ THIRD_PARTY_ROOT="${HOST_ROOT}/third_party"
 ECHO_ROOT="${ECHO_MESSAGE_SYSTEM_ROOT:-${THIRD_PARTY_ROOT}/echo_message_system}"
 NODES_ROOT="${RECORDLAB_NODES_ROOT:-${THIRD_PARTY_ROOT}/Recordlab_nodes}"
 AGENTS_CONFIG="${RECORDLAB_AGENTS_CONFIG:-${NODES_ROOT}/config/agents_config.json}"
-APP_BIN="${HOST_ROOT}/build/recordlab_master_app"
+APP_BIN="${HOST_ROOT}/build/recordlab_host_app"
 VENV_DIR="${RECORDLAB_VENV_DIR:-${HOST_ROOT}/.venv-py310}"
 
 if [[ -x "${VENV_DIR}/bin/python" ]]; then
@@ -50,6 +50,7 @@ fi
 
 echo "[recordlab] cleaning old RecordLab processes"
 pkill -f "recordlab_master_app" 2>/dev/null || true
+pkill -f "recordlab_host_app" 2>/dev/null || true
 pkill -f "recordlab_nodes.core.node_runtime" 2>/dev/null || true
 
 echo "[recordlab] starting UI"
