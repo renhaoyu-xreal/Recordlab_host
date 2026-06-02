@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     })";
     config.close();
 
-    recordlab::host::ui::MainWindow window(config_path);
+    recordlab::host::ui::MainWindow window(config_path, ".", ".");
     auto* entry = window.entryPage();
     require(entry != nullptr, "entry page missing");
     require(entry->findChild<QPushButton*>("agent_button_imu_simulation") != nullptr, "agent button missing");

@@ -29,7 +29,6 @@ add_library(recordlab_host
   include/recordlab_host/scripts/scripts_actuator.h
   include/recordlab_host/ui/data_page.h
   include/recordlab_host/ui/entry_page.h
-  include/recordlab_host/ui/imu_runtime_bridge.h
   include/recordlab_host/ui/main_window.h
   include/recordlab_host/ui/script_page.h
   include/recordlab_host/ui/sensor_workspace_widget.h
@@ -53,7 +52,6 @@ add_library(recordlab_host
   src/scripts/scripts_actuator.cpp
   src/ui/data_page.cpp
   src/ui/entry_page.cpp
-  src/ui/imu_runtime_bridge.cpp
   src/ui/main_window.cpp
   src/ui/script_page.cpp
   src/ui/sensor_workspace_widget.cpp
@@ -86,7 +84,6 @@ foreach(test_name
   test_host_message_bus
   test_process_handle
   test_echo_python_integration
-  test_imu_runtime_bridge
   test_ui_layout_contract
 )
   add_executable(${test_name} tests/${test_name}.cpp)

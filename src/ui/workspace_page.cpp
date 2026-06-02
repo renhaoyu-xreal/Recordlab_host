@@ -1,7 +1,7 @@
 #include "recordlab_host/ui/workspace_page.h"
 
 #include "recordlab_host/ui/data_page.h"
-#include "recordlab_host/ui/imu_runtime_bridge.h"
+#include "recordlab_host/ui/main_window.h"
 #include "recordlab_host/ui/sensor_workspace_widget.h"
 #include "recordlab_host/ui/script_page.h"
 
@@ -92,27 +92,29 @@ DataPage* WorkspacePage::dataPage() const {
     return data_page_;
 }
 
-void WorkspacePage::bindRuntime(ImuRuntimeBridge* runtime) {
-    runtime_ = runtime;
-    if (!runtime_) {
-        return;
-    }
-    connect(data_page_, &DataPage::commandRequested, runtime_, &ImuRuntimeBridge::sendCommand);
-    connect(data_page_, &DataPage::stopAllRequested, runtime_, &ImuRuntimeBridge::shutdown);
-    connect(script_page_, &ScriptPage::runScriptRequested, runtime_, &ImuRuntimeBridge::runScript);
-    connect(script_page_, &ScriptPage::stopScriptRequested, runtime_, &ImuRuntimeBridge::stopScript);
-    connect(runtime_, &ImuRuntimeBridge::logMessage, this, [this](const QString& message) {
+void WorkspacePage::bindMainWindow(MainWindow* mainWindow) {
+    main_window_ = mainWindow;
+    if (!main_window_) return;
+
+    // Commands / scripts → MainWindow
+    connect(data_page_, &DataPage::commandRequested, main_window_, &MainWindow::sendCommand);
+    connect(data_page_, &DataPage::stopAllRequested, main_window_, &MainWindow::shutdown);
+    connect(script_page_, &ScriptPage::runScriptRequested, main_window_, &MainWindow::runScript);
+    connect(script_page_, &ScriptPage::stopScriptRequested, main_window_, &MainWindow::stopScript);
+
+    // MainWindow signals → UI
+    connect(main_window_, &MainWindow::logMessage, this, [this](const QString& message) {
         if (!message.trimmed().isEmpty()) {
             script_page_->logView()->appendPlainText(message);
             data_page_->logView()->appendPlainText(message);
         }
     });
-    connect(runtime_, &ImuRuntimeBridge::watchdogStateChanged, this, [this](const QString& state) {
+    connect(main_window_, &MainWindow::watchdogStateChanged, this, [this](const QString& state) {
         watchdog_value_label_->setText(active_agent_.isEmpty()
             ? QStringLiteral("Watchdog: %1").arg(state)
             : QStringLiteral("Watchdog: 当前 Agent: %1 | %2").arg(active_agent_, state));
     });
-    connect(runtime_, &ImuRuntimeBridge::topicDataReceived, this, [this](const QString& name, const QString& value_json, double frequency) {
+    connect(main_window_, &MainWindow::topicDataReceived, this, [this](const QString& name, const QString& value_json, double frequency) {
         auto value = nlohmann::json::parse(value_json.toStdString(), nullptr, false);
         if (value.is_discarded()) {
             value = nlohmann::json::object();
@@ -125,10 +127,10 @@ void WorkspacePage::bindRuntime(ImuRuntimeBridge* runtime) {
             data_page_->logView()->appendPlainText(QStringLiteral("UI 已接收 imu_data，实时值区域开始刷新。"));
         }
     });
-    connect(runtime_, &ImuRuntimeBridge::recordTimerChanged, this, [this](double seconds) {
+    connect(main_window_, &MainWindow::recordTimerChanged, this, [this](double seconds) {
         timer_value_label_->setText(QStringLiteral("录制时长: %1 s").arg(seconds, 0, 'f', 1));
     });
-    connect(runtime_, &ImuRuntimeBridge::timeDelayChanged, this, [this](double milliseconds) {
+    connect(main_window_, &MainWindow::timeDelayChanged, this, [this](double milliseconds) {
         delay_value_label_->setText(QStringLiteral("时间延迟: %1 ms").arg(milliseconds, 0, 'f', 1));
     });
 }

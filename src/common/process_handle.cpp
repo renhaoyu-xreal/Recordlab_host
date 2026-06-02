@@ -6,11 +6,14 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
+#include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -306,6 +309,92 @@ int ProcessHandle::wait(int timeout_ms) {
         waited += sleep_ms;
     }
     return -1;
+}
+
+void ProcessHandle::killByCmdlinePattern(const std::string& pattern) {
+    const pid_t my_pid = ::getpid();
+    DIR* proc_dir = ::opendir("/proc");
+    if (!proc_dir) return;
+
+    std::vector<pid_t> targets;
+
+    struct dirent* entry = nullptr;
+    while ((entry = ::readdir(proc_dir)) != nullptr) {
+        if (entry->d_type != DT_DIR) continue;
+        const char* name = entry->d_name;
+        // Only numeric names are pids.
+        bool all_digits = true;
+        for (const char* p = name; *p && all_digits; ++p) {
+            all_digits = (*p >= '0' && *p <= '9');
+        }
+        if (!all_digits || name[0] == '\0') continue;
+
+        pid_t pid = static_cast<pid_t>(std::stoi(name));
+        if (pid <= 1 || pid == my_pid) continue;
+
+        std::string cmdline_path = std::string("/proc/") + name + "/cmdline";
+        std::ifstream cmdline_file(cmdline_path, std::ios::binary);
+        if (!cmdline_file.is_open()) continue;
+
+        std::string cmdline((std::istreambuf_iterator<char>(cmdline_file)),
+                             std::istreambuf_iterator<char>());
+        // Replace null bytes with spaces for readable matching.
+        for (auto& c : cmdline) {
+            if (c == '\0') c = ' ';
+        }
+
+        if (cmdline.find(pattern) != std::string::npos) {
+            targets.push_back(pid);
+        }
+    }
+    ::closedir(proc_dir);
+
+    // Kill collected targets.
+    if (targets.empty()) return;
+
+    common::Logger::instance().log(
+        common::LogLevel::Info,
+        "ProcessHandle",
+        "startup cleanup: found " + std::to_string(targets.size()) +
+            " orphaned process(es) matching \"" + pattern + "\"");
+
+    for (pid_t target : targets) {
+        common::Logger::instance().log(
+            common::LogLevel::Info,
+            "ProcessHandle",
+            "sending SIGTERM to orphaned process pid=" + std::to_string(target));
+        // Try process group first, then individual.
+        ::kill(-target, SIGTERM);
+        ::kill(target, SIGTERM);
+    }
+
+    // Wait up to 3 seconds for them to exit.
+    const int max_wait_ms = 3000;
+    const int poll_ms = 50;
+    for (int waited = 0; waited < max_wait_ms; waited += poll_ms) {
+        bool any_alive = false;
+        for (pid_t target : targets) {
+            if (::kill(target, 0) == 0) {  // still alive
+                any_alive = true;
+                break;
+            }
+        }
+        if (!any_alive) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
+    }
+
+    // Force-kill any survivors.
+    for (pid_t target : targets) {
+        if (::kill(target, 0) == 0) {
+            common::Logger::instance().log(
+                common::LogLevel::Warn,
+                "ProcessHandle",
+                "orphaned process pid=" + std::to_string(target) +
+                    " still alive after SIGTERM; sending SIGKILL");
+            ::kill(-target, SIGKILL);
+            ::kill(target, SIGKILL);
+        }
+    }
 }
 
 }  // namespace recordlab::host

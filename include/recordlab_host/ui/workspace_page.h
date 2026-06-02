@@ -10,7 +10,7 @@ class QTabWidget;
 namespace recordlab::host::ui {
 
 class DataPage;
-class ImuRuntimeBridge;
+class MainWindow;
 class ScriptPage;
 
 class WorkspacePage : public QWidget {
@@ -24,7 +24,7 @@ public:
     QTabWidget* tabWidget() const;
     ScriptPage* scriptPage() const;
     DataPage* dataPage() const;
-    void bindRuntime(ImuRuntimeBridge* runtime);
+    void bindMainWindow(MainWindow* mainWindow);
 
 signals:
     void backRequested();
@@ -39,7 +39,7 @@ private:
     QTabWidget* tabs_ = nullptr;
     ScriptPage* script_page_ = nullptr;
     DataPage* data_page_ = nullptr;
-    ImuRuntimeBridge* runtime_ = nullptr;
+    MainWindow* main_window_ = nullptr;
     bool saw_imu_data_ = false;
 };
 

@@ -189,9 +189,11 @@ Host 常驻进程只有一个：
 
 线程 T0：UI 主线程。
 
-- 运行代码：`recordlab_host_app`.cpp`、`main_window`、`entry_page`、`agent_page`、`script_page`、`data_page`。
-- 职责：Qt GUI、入口页、主 Agent 选择、脚本页、单步命令页、数据显示刷新。
+- 运行代码：`recordlab_host_app.cpp`、`main_window`、`entry_page`、`script_page`、`data_page`。
+- 职责：Qt GUI、入口页、主 Agent 选择、脚本页、单步命令页、数据显示刷新。MainWindow 直接持有 `HostMessageBus`、`AgentManager`（T2 线程）、`DataReceiver`（T3）、`ScriptsActuator`（T5），通过 30Hz QTimer 轮询总线并将消息转换为 Qt 信号分发给子页面。
 - 通信方式：只向 Host 内部消息总线发布命令消息或订阅状态消息。UI 不直接连接设备 node，不直接订阅设备 topic，不直接执行业务命令。
+- 进程清理：`recordlab_host_app` 启动时调用 `ProcessHandle::killByCmdlinePattern("recordlab_nodes.core.node_runtime")` 清理上次运行残留的 node_runtime 进程。关闭时 MainWindow 析构函数按序销毁 ScriptsActuator → DataReceiver → AgentManager（AgentManager::stop() 内通过 ProcessHandle::terminate() 先 SIGTERM 进程组、3 秒后 SIGKILL）。
+- 已删除：`ImuRuntimeBridge` 曾作为中间 God Object 承担 Logger 初始化、AgentManager/DataReceiver 创建与生命周期管理、同步阻塞等待等越界职责，现已将其功能拆入 MainWindow 与 App 入口。
 
 线程 T1：Watchdog 线程。
 
@@ -520,6 +522,10 @@ Host 单元测试：
 - BSP 主节点迁移到 Nodes 仓库方向已落地：`glasses_bsp_node` 作为 Python business node，经通用 `node_runtime` 启动；BSP 相关脚本入口迁入 `node_scripts/`。BSP RGB 底层能力未作为本轮主链路迁移，相关脚本入口保留并明确返回未迁移状态。
 
 执行中发现并修正的问题：
+
+- **删除 `ImuRuntimeBridge`**：早期实现中 `ImuRuntimeBridge` 作为 UI 适配层，实际上充当了所有后端组件（AgentManager、DataReceiver、ScriptsActuator）的创建者、配置者和协调者，与 PLAN.md 中各组件独立线程的架构设计矛盾。已将 Logger 初始化上移到 `app/recordlab_host_app.cpp` 入口，AgentManager/DataReceiver/ScriptsActuator 生命周期移入 `MainWindow`，总线轮询和 Qt 信号转换也在 `MainWindow` 中直接完成。删除了 `include/recordlab_host/ui/imu_runtime_bridge.h`、`src/ui/imu_runtime_bridge.cpp` 和 `tests/test_imu_runtime_bridge.cpp`。
+- **添加启动/关闭进程清理**：启动时 `recordlab_host_app` 通过 `ProcessHandle::killByCmdlinePattern("recordlab_nodes.core.node_runtime")` 扫描 `/proc` 目录清理残留的 node_runtime 进程（先 SIGTERM，3 秒后 SIGKILL）。关闭时 `MainWindow::~MainWindow()` 按序销毁 ScriptsActuator → DataReceiver → AgentManager，后者通过 `ProcessHandle::terminate()` 先 SIGTERM 进程组后 SIGKILL 确保子进程完全终止。
+
 
 - 当前 `echo_message_system` C++ 高层 API 与 Python 高层 API 原本不完全跨语言兼容。已按新的执行方向修改中间件 C++ 版本，而不是在 Host 仓库保留私有协议实现。
 - 快速命令 result 可能遇到 ZMQ PUB/SUB slow-joiner 风险。高概率场景是 client 刚启动 result/feedback 订阅后立刻发送毫秒级返回的 `check/init_device` 等命令；正常运行中订阅已稳定，或命令本身耗时较长时概率较低。中间件层可以通过订阅 ready handshake、result 改为 REQ/REP、ack 后发布、短期 result buffer 等方式彻底解决。当前第一版只记录该风险，测试中在 client `start_listening()` 后增加启动稳定等待，不在 node runtime 里加入业务延迟。
