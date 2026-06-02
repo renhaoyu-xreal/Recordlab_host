@@ -13,6 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 namespace recordlab::host {
 
 /// DataReceiver (PLAN.md T3) — owns topic subscriptions, computes frequency
@@ -24,7 +26,9 @@ public:
         std::string name;
         int port = 0;
         std::string encoding = "json";
+        std::string parse_mode = "json";
         double ui_max_hz = 30.0;  ///< Max rate for UI bus notifications. 0 = unlimited.
+        nlohmann::json qos = nlohmann::json::object();
     };
 
     explicit DataReceiver(HostMessageBus& bus);
@@ -48,6 +52,7 @@ private:
         std::chrono::steady_clock::time_point last_ui_publish;
         std::chrono::steady_clock::time_point last_debug_log;
         double ui_max_hz = 30.0;
+        bool debug_stats = false;
         bool first_message = true;
         std::size_t receive_count = 0;
         std::size_t publish_count = 0;

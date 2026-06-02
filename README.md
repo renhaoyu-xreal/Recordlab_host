@@ -2,6 +2,13 @@
 
 RecordLab 的主程序仓库，负责启动 UI、管理 Agent、调用脚本、接收数据并和 `echo_message_system` 通信。
 
+## 架构边界
+
+- `Recordlab_host` 是稳定 Host 仓库，只负责 UI、Agent 管理、Watchdog、DataReceiver、脚本进程和 Host 内部消息总线。
+- `third_party/Recordlab_nodes/config/agents_config.json` 是业务配置入口，声明 node class、Action 端口、topic、encoding、parse mode、UI 频率和 QoS。
+- `echo_message_system` 是中间件仓库，只提供跨语言 Action/Topic 和通用 QoS/Options，不包含 RecordLab 业务 topic 判断。
+- 高频预览等 sensor topic 使用配置化 latest-only/depth=1 语义；录制链路由 Nodes 内部 writer 保存原始数据，不受 UI preview QoS 影响。
+
 ## 首次安装
 
 ```bash

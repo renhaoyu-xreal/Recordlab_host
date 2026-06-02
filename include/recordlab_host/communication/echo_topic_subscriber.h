@@ -15,6 +15,13 @@ public:
 
     EchoTopicSubscriber(std::string host, int port, std::string topic, Callback callback);
     EchoTopicSubscriber(std::string host, int port, std::string topic, std::string encoding, Callback callback);
+    EchoTopicSubscriber(std::string host,
+                        int port,
+                        std::string topic,
+                        std::string encoding,
+                        std::string parse_mode,
+                        echo::SubscriberOptions options,
+                        Callback callback);
     ~EchoTopicSubscriber();
 
     EchoTopicSubscriber(const EchoTopicSubscriber&) = delete;
@@ -26,6 +33,7 @@ private:
     std::unique_ptr<echo::Subscriber> subscriber_;
     std::string topic_;
     std::string encoding_;
+    std::string parse_mode_;
     Callback callback_;
 };
 

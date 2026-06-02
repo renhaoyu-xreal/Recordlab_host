@@ -6,7 +6,7 @@
 
 - `/home/hyren/Recordlab_host`：C++ 实现，作为稳定 Host 仓库。这里放 UI、Agent 管理、Watchdog、DataReceiver、DataRegistryServer、ScriptsActuator、Host 内部消息总线、进程/线程管理和中间件适配层。Host 不随 BSP、NVIZ、UR、新设备、新脚本业务变化而修改。
 - `/home/hyren/Recordlab_nodes`：Python 实现，作为业务 Nodes 仓库。这里放 `agents_config.json`、Python node、设备适配、业务脚本、XREAL SDK 相关 Python 进程等。
-- `/home/hyren/echo_message_system`：中间件仓库，Host 直接调用 C++ 版本，Node 直接调用 Python 版本。执行中确认 C++ 高层 API 原先偏 Master 发现和动态端口，Python 高层 API 偏固定端口直连，因此已修改 C++ 版本中间件，补齐固定端口 ActionClient 与 Subscriber 能力，使 Host 不再在自身仓库里重写一套 Python wire protocol。
+- `/home/hyren/echo_message_system`：中间件仓库，Host 直接调用 C++ 版本，Node 直接调用 Python 版本。中间件只提供跨语言 Action/Topic、固定端口连接、动态 Master 发现、编码和通用 QoS/Options 能力，不承载 RecordLab 业务逻辑。执行中确认 C++ 高层 API 原先偏 Master 发现和动态端口，Python 高层 API 偏固定端口直连，因此已修改 C++ 版本中间件，补齐固定端口 ActionClient 与 Subscriber 能力，使 Host 不再在自身仓库里重写一套 Python wire protocol。
 - `/home/hyren/RecordLab_Py_old`：只读参考。重构优先按新架构图设计，只在字段格式、可复用算法、测试样例上参考老项目，不按老项目结构机械迁移。
 - `/home/hyren/RecordLabC`：只读参考。架构错误的c++版本，但是有很多新功能的具体实现
 
@@ -175,7 +175,7 @@ Recordlab_nodes/
     test_imu_sim_recording.py
 ```
 
-不再为每个 node 单独设计 `manifest.json`。原因是 `agents_config.json` 已经是 Nodes 仓库的业务配置入口，里面只声明 node class、Action 连接入口、topic、启动参数和脚本路径；如果再给每个 node 增加 manifest，会造成同一信息分散在两个配置里，Host 也需要多读一层业务文件，不符合 Host 稳定、Nodes 负责业务配置的边界。
+不再为每个 node 单独设计 `manifest.json`。原因是 `agents_config.json` 已经是 Nodes 仓库的业务配置入口，里面声明 node class、Action 连接入口、topic、topic encoding、parse mode、UI 展示频率、topic QoS、启动参数和脚本路径；如果再给每个 node 增加 manifest，会造成同一信息分散在两个配置里，Host 也需要多读一层业务文件，不符合 Host 稳定、Nodes 负责业务配置的边界。
 
 ## 3. 运行时进程与线程
 
@@ -190,7 +190,7 @@ Host 常驻进程只有一个：
 线程 T0：UI 主线程。
 
 - 运行代码：`recordlab_host_app.cpp`、`main_window`、`entry_page`、`script_page`、`data_page`。
-- 职责：Qt GUI、入口页、主 Agent 选择、脚本页、单步命令页、数据显示刷新。MainWindow 直接持有 `HostMessageBus`、`AgentManager`（T2 线程）、`DataReceiver`（T3）、`ScriptsActuator`（T5），通过 30Hz QTimer 轮询总线并将消息转换为 Qt 信号分发给子页面。
+- 职责：Qt GUI、入口页、主 Agent 选择、脚本页、单步命令页、数据显示刷新。MainWindow 直接持有 `HostMessageBus`、`AgentManager`（T2 线程）、`DataReceiver`（T3）、`ScriptsActuator`（T5），通过 30Hz QTimer 轮询总线并将消息转换为 UI 更新。高频 topic 的 UI 通知由 HostMessageBus latest-only 合并，不在 UI 队列中补处理旧帧。
 - 通信方式：只向 Host 内部消息总线发布命令消息或订阅状态消息。UI 不直接连接设备 node，不直接订阅设备 topic，不直接执行业务命令。
 - 进程清理：`recordlab_host_app` 启动时调用 `ProcessHandle::killByCmdlinePattern("recordlab_nodes.core.node_runtime")` 清理上次运行残留的 node_runtime 进程。关闭时 MainWindow 析构函数按序销毁 ScriptsActuator → DataReceiver → AgentManager（AgentManager::stop() 内通过 ProcessHandle::terminate() 先 SIGTERM 进程组、3 秒后 SIGKILL）。
 - 已删除：`ImuRuntimeBridge` 曾作为中间 God Object 承担 Logger 初始化、AgentManager/DataReceiver 创建与生命周期管理、同步阻塞等待等越界职责，现已将其功能拆入 MainWindow 与 App 入口。
@@ -214,7 +214,8 @@ Host 常驻进程只有一个：
 - 运行代码：`data_receiver.cpp`、`echo_topic_subscriber.cpp`、`sensor_queue.cpp`、`frame_decoder.cpp`。
 - 职责：订阅固定 topic 和动态注册 topic，做频率统计、抽帧、格式转换、UI 缓存更新。
 - 通信方式：通过 `echo_message_system` C++ 版本的 Subscriber 订阅 Python node 使用 Python Publisher 发布的 topic；转换后的数据写入 `sensor_queue`，并通过 Host 消息总线发布数据更新事件。
-- 处理内容：IMU、图像元数据、record timer、time delay、motion status、自定义注册数据。
+- QoS 来源：DataReceiver 不根据 topic 名写业务分支。它从 `agents_config.json` 的 topic `qos` 字段读取 `history/depth/receive_hwm/deliver_latest_only/drain_limit/debug_stats`，转换为 `echo::SubscriberOptions` 和 Host UI 队列合并策略。
+- 处理内容：IMU、图像元数据、record timer、time delay、motion status、自定义注册数据。业务数据的显示逻辑可以在 UI 层识别业务名称，但通信层和中间件层不能按业务 topic 名改变行为。
 
 线程 T4：DataRegistryServer 线程。
 
@@ -270,7 +271,7 @@ Python node 进程的主线程运行通用 `node_runtime.py`，不运行具体 n
 
 - 运行代码：具体设备类，例如 `imu_data_player.py`、`bsp_device.py`、`nviz_state_detector.py`。
 - 职责：从 CSV、SDK、socket、shell、UR 控制器等来源采集数据。
-- 通信方式：通过 callback 或内部队列把原始数据交给具体 node；具体 node 负责转换为 topic 消息并通过 Python Publisher 发布。
+- 通信方式：通过 callback 或内部队列把原始数据交给具体 node；具体 node 负责转换为 topic 消息并通过 Python Publisher 发布。Publisher 的 `send_hwm/send_timeout_ms/drop_when_busy/linger_ms` 等参数由 `agents_config.json` 的 topic `qos` 字段进入 `PublisherManager` 后透传给 `echo_message_system` Python Publisher。
 
 线程 NW：录制写入线程。
 
@@ -298,6 +299,7 @@ Host 内部通信：
 - Host 内部必须实现 C++ 线程安全消息队列组成的消息总线：`host_message_bus`。
 - UI、Watchdog、AgentManager、DataReceiver、DataRegistryServer、ScriptsActuator 都是消息总线的生产者或消费者。
 - 每类线程拥有自己的阻塞队列；消息总线根据 `target`、`topic` 或 `message_type` 投递消息。
+- 消息可携带可选 `coalesce_key`。同一 target 下相同 `coalesce_key` 的旧消息会被新消息替换，用于高频 sensor topic 的 UI 通知，语义等价于 ROS sensor data 常用的 depth=1/latest-only；控制命令、脚本状态、日志等不使用该 key，保持普通队列语义。
 - Host 内部消息必须是结构化消息，例如 `request_id`、`source`、`target`、`agent_name`、`cmd`、`params`、`timeout_ms`、`payload`。
 - Host 内部不传递设备对象、不暴露 Python node 实例、不让 UI 直接访问 Agent 内部状态。
 
@@ -313,15 +315,16 @@ Host 到 Python node 控制通信：
 Python node 到 Host 数据通信：
 
 - Python node 直接调用 `echo_message_system` Python Publisher 发布 topic。
-- Host 使用 `echo_message_system` C++ 版本的 Subscriber 订阅固定端口 topic；Host 仓库内的 `echo_topic_subscriber` 只是薄封装，负责 JSON 解析和回调转发。
-- 双方通过 `agents_config.json` 约定 topic 名、端口、编码和数据 schema。
-- 高频数据第一版仍走中间件现有能力；后续如果发现 C++/Python 版本协议边界仍不统一，优先在中间件 C++/Python 版本中修正，而不是在 Host 写业务私有协议。
+- Host 使用 `echo_message_system` C++ 版本的 Subscriber 订阅固定端口 topic；Host 仓库内的 `echo_topic_subscriber` 只是薄封装，负责按配置选择 parse mode、JSON/二进制 JSON 解析和回调转发。
+- 双方通过 `agents_config.json` 约定 topic 名、端口、编码、parse mode、UI 展示频率、QoS 和数据 schema。
+- 高频数据走中间件通用 QoS/Options，不允许中间件按业务 topic 名写分支。比如图像预览需要“只看最新帧”时，应在 topic 配置里声明 `{"history": "latest", "depth": 1, "drop_when_busy": true, "deliver_latest_only": true}`，由 Nodes PublisherManager 和 Host DataReceiver 转换成 Echo Publisher/Subscriber Options。
+- 如果发现 C++/Python 版本协议边界仍不统一，优先在中间件 C++/Python 版本中修正通用协议或 API，而不是在 Host 写业务私有协议。
 
 动态数据注册通信：
 
 - Python node 使用 Nodes 仓库的 `DataRegistryClient` 发起注册。
 - Host `DataRegistryServer` 使用中间件 C++ 版本暴露注册服务。
-- 注册内容包括 `data_name`、`data_type`、`port`、`node_name`。
+- 注册内容包括 `data_name`、`data_type`、`port`、`node_name`，后续应扩展支持 `encoding`、`parse_mode`、`ui_max_hz` 和 `qos`，使动态 topic 与 `agents_config.json` 静态 topic 遵循同一契约。
 - Host 收到注册后，通过 Host 消息总线通知 DataReceiver 添加订阅。
 
 脚本通信：
@@ -354,10 +357,16 @@ Python node 到 Host 数据通信：
         "imu_simulation_record_demo.py"
       ],
       "topics": [
-        {"name": "imu_data", "port": 16510, "encoding": "json"},
-        {"name": "record_timer", "port": 16520, "encoding": "json"},
-        {"name": "time_delay", "port": 16521, "encoding": "json"},
-        {"name": "motion_status", "port": 16525, "encoding": "json"}
+        {
+          "name": "imu_data",
+          "port": 16510,
+          "encoding": "json",
+          "parse_mode": "type_vector6_fast",
+          "ui_max_hz": 30
+        },
+        {"name": "record_timer", "port": 16520, "encoding": "json", "ui_max_hz": 10},
+        {"name": "time_delay", "port": 16521, "encoding": "json", "ui_max_hz": 10},
+        {"name": "motion_status", "port": 16525, "encoding": "json", "ui_max_hz": 5}
       ],
       "custom_params": {}
     }
@@ -372,6 +381,35 @@ Host 默认从 `/home/hyren/Recordlab_nodes/config/agents_config.json` 读取，
 Host 只校验 `agents_config.json` 的结构，不校验业务 cmd 语义。脚本或 UI 发起的任意 `cmd + params` 都由 Agent 原样转发给对应 node；node 支持就执行，不支持就返回失败。新增 topic、新 node、新脚本通过 Nodes 仓库配置表达，新增业务 cmd 只需要在具体 node 代码里注册/实现。
 
 `default_scripts` 是主 Agent 的可选配置，用于 UI 进入该 Agent 后自动加载常用脚本，减少用户每次手动导入脚本的操作。脚本实际文件位于 Nodes 仓库 `node_scripts/` 下；Host 只负责列出和启动脚本进程，不把脚本内容写进 Host。
+
+topic 配置字段约定：
+
+- `name`：业务 topic 名。Host 可以把它展示在 UI，但中间件不能根据该字符串写业务分支。
+- `port`：固定端口。Host C++ Subscriber 和 Node Python Publisher 按该端口直连。
+- `encoding`：wire 编码。当前支持 `json`、`json_binary`、`pickle`。`json_binary` 用于结构化 JSON 中携带 bytes。
+- `parse_mode`：Host 适配层解析优化模式，默认 `json`。例如 `type_vector6_fast` 表示 payload 是 `{type, timestamp_ns, data[6]}` 形状，可走快速解析；名称描述数据形状，不描述业务设备。
+- `ui_max_hz`：Host UI 通知最大频率。它只影响 UI 展示，不影响 node 采集、录制和 topic 发布。
+- `qos`：通信语义。常用字段包括 `history`、`depth`、`send_hwm`、`receive_hwm`、`send_timeout_ms`、`linger_ms`、`drop_when_busy`、`deliver_latest_only`、`drain_limit`、`debug_stats`。这些字段由 Nodes PublisherManager 和 Host DataReceiver 透传给 Echo Options，Echo 不知道业务 topic 名。
+
+高频预览 topic 示例：
+
+```json
+{
+  "name": "camera_data",
+  "port": 16515,
+  "encoding": "json_binary",
+  "ui_max_hz": 30,
+  "qos": {
+    "history": "latest",
+    "depth": 1,
+    "drop_when_busy": true,
+    "send_timeout_ms": 0,
+    "deliver_latest_only": true
+  }
+}
+```
+
+该配置表达的是通用 sensor QoS：生产者不被慢消费者阻塞，订阅者 drain 积压消息后只交付最新样本，UI 队列只保留最新通知。录制链路仍由业务 node 内部 writer 写原始采集数据，不受 UI preview QoS 影响。
 
 ## 6. 抽象类与具体 node
 
@@ -479,6 +517,7 @@ Host 单元测试：
 - Host C++ `echo_action_client` 到 Python ActionServer 的互通。
 - Host C++ `echo_topic_subscriber` 到 Python Publisher 的互通。
 - 补充中间件契约测试目标：验证 C++ 高层 API 与 Python 高层 API 固定端口 Action/Topic 互通。
+- 中间件 QoS/Options 契约：验证 C++/Python Publisher/Subscriber 均能通过参数设置 HWM、非阻塞发送、latest-only 交付，且 Echo 仓库不包含 RecordLab 业务 topic 名。
 - DataRegistryServer 动态注册。
 - Watchdog 状态机。
 - AgentManager 启停 Python node 进程。
@@ -508,10 +547,11 @@ Host 单元测试：
 - Host 不写 BSP/NVIZ/UR 专用逻辑。
 - Host 不直接调用设备 SDK。
 - Host 不保存业务命令枚举。
+- Host 通信适配层不按业务 topic 名选择中间件行为；只按 `agents_config.json` 中的 `encoding`、`parse_mode`、`qos` 做通用解析和 QoS 透传。
 - Nodes 可以随业务变化而变化。
 - 不为每个 node 单独设计 `manifest.json`。
 - BaseNode 和 MainNode 是抽象父类，里面不实现业务逻辑。
-- 中间件修改只用于 C++/Python 版本协议和高层 API 兼容，不承载 RecordLab 业务逻辑。
+- 中间件修改只用于 C++/Python 版本协议、高层 API 兼容和通用通信 QoS，不承载 RecordLab 业务逻辑；`echo_message_system` 中不得出现 `camera_data`、`imu_data` 等 RecordLab 业务 topic 名判断。
 - 老 Python 项目只作参考，不作为新架构的边界依据。
 
 ## 10. 当前执行进展与新增测试目标
@@ -531,6 +571,8 @@ Host 单元测试：
 - 快速命令 result 可能遇到 ZMQ PUB/SUB slow-joiner 风险。高概率场景是 client 刚启动 result/feedback 订阅后立刻发送毫秒级返回的 `check/init_device` 等命令；正常运行中订阅已稳定，或命令本身耗时较长时概率较低。中间件层可以通过订阅 ready handshake、result 改为 REQ/REP、ack 后发布、短期 result buffer 等方式彻底解决。当前第一版只记录该风险，测试中在 client `start_listening()` 后增加启动稳定等待，不在 node runtime 里加入业务延迟。
 - BSP 使用的 XREAL SDK 是 Python Qt/QObject 实现。修正方案不是改 Host，也不是让 BSP 拥有独立 main 入口，而是在 Python Nodes 通用 `node_runtime` 增加节点声明式 Qt 事件循环能力：具体 node class 可声明 `requires_qt_event_loop = True`，runtime 在实例化 node 前创建 `QCoreApplication` 并用 Qt event loop 承载 SDK 信号。Host 仍只启动 `python -m recordlab_nodes.core.node_runtime --config ... --agent ...`，不知道 Qt/XREAL/BSP。
 - **-------重要------：**当Host 早期 `EchoTopicSubscriber` 只按 JSON parse topic payload，不适合 BSP camera 等二进制/图像 topic。修正方案不是把 BSP 图像流降级成只有元数据的“假 JSON”，而是在中间件/Host 适配层支持 topic `encoding`：Python `echo_message_system` 增加 `json_binary` 编码，允许结构化 JSON 中携带 bytes；Host `EchoTopicSubscriber` 和 `DataReceiver` 按 `agents_config.json` 的 topic encoding 订阅和解析。
+- **解除中间件业务耦合**：早期为了优化 BSP 预览，`echo_message_system` 内部曾按 `camera_data` topic 名设置 HWM、非阻塞发送和 latest-only 交付，这是错误边界。已重构为 C++ `PublisherOptions`、`SubscriberOptions` 和 Python Publisher 参数；业务 topic 的 QoS 只写在 Nodes 仓库 `agents_config.json`，Host/Nodes 透传，Echo 只理解通用通信语义。
+- **Host UI sensor QoS**：HostMessageBus 增加 `coalesce_key`，DataReceiver 对 topic data 通知使用 latest-only 合并，避免 UI 慢时补处理旧帧。该能力属于 Host 内部消息总线通用能力，不是 BSP 专用逻辑。
 - Host `AgentManager` 早期只适配单一 node 进程，切换 primary agent 时如果已有进程会复用旧进程，导致 `imu_simulation` 和 `glasses_bsp_node` 不能按配置切换。已修正为按 agent name 管理当前 node 进程，切换 agent 时停止旧进程、重置 ActionClient、启动目标 node runtime。
 - **实现 T1 Watchdog 独立线程**：创建 `include/recordlab_host/lifecycle/` 目录，实现 `Watchdog` 类作为独立 T1 线程。状态机：DISCONNECTED（周期性 check）→ INITIALIZING（不 check，等待 init_device）→ HEALTHY（周期性 check，5s 间隔）。DISCONNECTED 下间隔 2s，3 次连续失败退回到 DISCONNECTED。`estop` 触发立即回退 DISCONNECTED。AgentManager 的消息路由改为 `publishResult`，根据请求来源回发 `CMD_RESULT`（同时发 UI 一份）。
 - **修复 EchoActionClient 超时崩溃**：`sendCommand` 中 `sendGoal` 抛异常和 `cv.wait_for` 超时不再抛 `std::runtime_error`（导致 Host 崩溃），改为返回 `ActionResult`（success=false）。BSP 未连接眼镜时 SSH 连接超时不导致进程终止。

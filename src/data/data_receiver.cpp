@@ -17,9 +17,25 @@ std::string describeTopics(const std::vector<DataReceiver::TopicConfig>& topics)
         }
         oss << topics[i].name << "@" << topics[i].port
             << "/" << topics[i].encoding
-            << " ui_max_hz=" << topics[i].ui_max_hz;
+            << " parse_mode=" << topics[i].parse_mode
+            << " ui_max_hz=" << topics[i].ui_max_hz
+            << " qos=" << topics[i].qos.dump();
     }
     return oss.str();
+}
+
+echo::SubscriberOptions subscriberOptionsFromQos(const nlohmann::json& qos) {
+    echo::SubscriberOptions options;
+    if (!qos.is_object()) {
+        return options;
+    }
+    const std::string history = qos.value("history", std::string{});
+    const int depth = qos.value("depth", 0);
+    options.receive_high_water_mark = qos.value("receive_hwm", depth);
+    options.linger_ms = qos.value("linger_ms", 0);
+    options.deliver_latest_only = qos.value("deliver_latest_only", history == "latest");
+    options.drain_limit = qos.value("drain_limit", 4000);
+    return options;
 }
 
 nlohmann::json frequenciesToJson(const std::unordered_map<std::string, double>& frequencies) {
@@ -105,6 +121,7 @@ void DataReceiver::subscribe(const std::string& host, const std::vector<TopicCon
                 std::chrono::steady_clock::now(),
                 std::chrono::steady_clock::now(),
                 topic.ui_max_hz,
+                topic.qos.value("debug_stats", false),
                 true,
             };
         }
@@ -114,6 +131,8 @@ void DataReceiver::subscribe(const std::string& host, const std::vector<TopicCon
     for (const auto& topic : topics) {
         subscribers_.push_back(std::make_unique<EchoTopicSubscriber>(
             host, topic.port, topic.name, topic.encoding,
+            topic.parse_mode,
+            subscriberOptionsFromQos(topic.qos),
             [this, name = topic.name](const nlohmann::json& value) {
                 onTopicData(name, value);
             }));
@@ -210,13 +229,13 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
             state.publish_count += 1;
         }
 
-        if (topic_name == "camera_data") {
+        if (state.debug_stats) {
             const double debug_elapsed = std::chrono::duration<double>(now - state.last_debug_log).count();
             if (debug_elapsed >= 1.0) {
                 common::Logger::instance().log(
                     common::LogLevel::Debug,
                     "DataReceiver",
-                    "camera_data recv_count=" + std::to_string(state.receive_count)
+                    topic_name + " recv_count=" + std::to_string(state.receive_count)
                         + " ui_publish_count=" + std::to_string(state.publish_count)
                         + " latest_hz=" + std::to_string(frequency_hz)
                         + " payload_bytes_est=" + std::to_string(estimatePayloadBytes(value))
@@ -251,10 +270,10 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
 }
 
 std::string DataReceiver::streamKeyFor(const std::string& topic_name, const nlohmann::json& value) const {
-    if (topic_name == "imu_data" && value.is_object()) {
+    if (value.is_object()) {
         const auto type = value.find("type");
         if (type != value.end() && type->is_number_integer()) {
-            return "imu:" + std::to_string(type->get<int>());
+            return topic_name + ":" + std::to_string(type->get<int>());
         }
     }
     return topic_name;
@@ -263,26 +282,18 @@ std::string DataReceiver::streamKeyFor(const std::string& topic_name, const nloh
 double DataReceiver::streamTimestampFor(const std::string& topic_name,
                                         const nlohmann::json& value,
                                         std::chrono::steady_clock::time_point now) const {
-    if (topic_name == "imu_data" && value.is_object()) {
-        const auto ts = value.find("timestamp_ns");
-        if (ts != value.end() && ts->is_number()) {
-            const double seconds = ts->get<double>() / 1e9;
+    (void)topic_name;
+    if (value.is_object()) {
+        const auto timestamp_ns = value.find("timestamp_ns");
+        if (timestamp_ns != value.end() && timestamp_ns->is_number()) {
+            const double seconds = timestamp_ns->get<double>() / 1e9;
             if (seconds > 0.0) {
                 return seconds;
             }
         }
-    }
-    if (topic_name == "camera_data" && value.is_object()) {
-        const auto ts = value.find("timestamp");
-        if (ts != value.end() && ts->is_number()) {
-            const double seconds = secondsFromTimestampValue(ts->get<double>());
-            if (seconds > 0.0) {
-                return seconds;
-            }
-        }
-        const auto ts_ns = value.find("timestamp_ns");
-        if (ts_ns != value.end() && ts_ns->is_number()) {
-            const double seconds = ts_ns->get<double>() / 1e9;
+        const auto timestamp = value.find("timestamp");
+        if (timestamp != value.end() && timestamp->is_number()) {
+            const double seconds = secondsFromTimestampValue(timestamp->get<double>());
             if (seconds > 0.0) {
                 return seconds;
             }

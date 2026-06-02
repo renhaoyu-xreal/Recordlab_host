@@ -62,7 +62,7 @@ bool extractDoubleArray6(const std::string& raw, std::array<double, 6>& values) 
     return true;
 }
 
-nlohmann::json parseImuFast(const std::string& raw) {
+nlohmann::json parseTypeVector6Fast(const std::string& raw) {
     int type = 0;
     std::int64_t timestamp_ns = 0;
     std::array<double, 6> values{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -84,13 +84,23 @@ EchoTopicSubscriber::EchoTopicSubscriber(std::string host, int port, std::string
     : EchoTopicSubscriber(std::move(host), port, std::move(topic), "json", std::move(callback)) {}
 
 EchoTopicSubscriber::EchoTopicSubscriber(std::string host, int port, std::string topic, std::string encoding, Callback callback)
-    : topic_(std::move(topic)), encoding_(std::move(encoding)), callback_(std::move(callback)) {
+    : EchoTopicSubscriber(std::move(host), port, std::move(topic), std::move(encoding), "json", echo::SubscriberOptions{}, std::move(callback)) {}
+
+EchoTopicSubscriber::EchoTopicSubscriber(std::string host,
+                                         int port,
+                                         std::string topic,
+                                         std::string encoding,
+                                         std::string parse_mode,
+                                         echo::SubscriberOptions options,
+                                         Callback callback)
+    : topic_(std::move(topic)), encoding_(std::move(encoding)),
+      parse_mode_(std::move(parse_mode)), callback_(std::move(callback)) {
     subscriber_ = std::make_unique<echo::Subscriber>(
         topic_, host, port,
         [this](const std::string& payload) {
             if (encoding_ == "json" || encoding_ == "json_binary" || encoding_.empty()) {
-                if (topic_ == "imu_data") {
-                    callback_(parseImuFast(payload));
+                if (parse_mode_ == "type_vector6_fast") {
+                    callback_(parseTypeVector6Fast(payload));
                     return;
                 }
                 callback_(nlohmann::json::parse(payload));
@@ -103,7 +113,8 @@ EchoTopicSubscriber::EchoTopicSubscriber(std::string host, int port, std::string
                 {"message", "non-json topic payload received"},
             });
         },
-        true);
+        true,
+        options);
 }
 
 EchoTopicSubscriber::~EchoTopicSubscriber() {

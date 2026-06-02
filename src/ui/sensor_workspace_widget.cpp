@@ -325,13 +325,13 @@ void SensorWorkspaceWidget::updateFrequencyLabels(const QString& data_name, cons
                     setListItemText(list, row, label, it->get<double>());
                 }
             };
-            updateFromMap(data_selection_list_, 0, QStringLiteral("IMU0-gyro"), "imu:1");
-            updateFromMap(data_selection_list_, 1, QStringLiteral("IMU0-acc"), "imu:2");
-            updateFromMap(data_selection_list_, 2, QStringLiteral("IMU0-mag"), "imu:3");
-            updateFromMap(data_selection_list_, 3, QStringLiteral("IMU0-temperature"), "imu:12");
-            updateFromMap(data_selection_list_, 4, QStringLiteral("IMU1-gyro"), "imu:4");
-            updateFromMap(data_selection_list_, 5, QStringLiteral("IMU1-acc"), "imu:5");
-            updateFromMap(data_selection_list_, 6, QStringLiteral("IMU1-temperature"), "imu:13");
+            updateFromMap(data_selection_list_, 0, QStringLiteral("IMU0-gyro"), "imu_data:1");
+            updateFromMap(data_selection_list_, 1, QStringLiteral("IMU0-acc"), "imu_data:2");
+            updateFromMap(data_selection_list_, 2, QStringLiteral("IMU0-mag"), "imu_data:3");
+            updateFromMap(data_selection_list_, 3, QStringLiteral("IMU0-temperature"), "imu_data:12");
+            updateFromMap(data_selection_list_, 4, QStringLiteral("IMU1-gyro"), "imu_data:4");
+            updateFromMap(data_selection_list_, 5, QStringLiteral("IMU1-acc"), "imu_data:5");
+            updateFromMap(data_selection_list_, 6, QStringLiteral("IMU1-temperature"), "imu_data:13");
             updateFromMap(custom_data_list_, 0, QStringLiteral("motion_status"), "motion_status");
             updateFromMap(custom_data_list_, 1, QStringLiteral("camera_data"), "camera_data");
             return;

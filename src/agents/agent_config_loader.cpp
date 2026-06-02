@@ -43,6 +43,9 @@ AgentConfig AgentConfigLoader::loadAgent(const std::string& agent_name) const {
             topic.at("name").get<std::string>(),
             topic.at("port").get<int>(),
             topic.value("encoding", "json"),
+            topic.value("parse_mode", "json"),
+            topic.value("ui_max_hz", 30.0),
+            topic.value("qos", nlohmann::json::object()),
         });
     }
     return cfg;

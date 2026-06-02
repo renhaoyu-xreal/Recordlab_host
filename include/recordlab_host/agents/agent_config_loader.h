@@ -10,6 +10,9 @@ struct TopicConfig {
     std::string name;
     int port = 0;
     std::string encoding = "json";
+    std::string parse_mode = "json";
+    double ui_max_hz = 30.0;
+    nlohmann::json qos = nlohmann::json::object();
 };
 
 struct AgentConfig {

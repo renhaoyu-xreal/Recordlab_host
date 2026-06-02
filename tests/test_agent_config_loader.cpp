@@ -38,6 +38,12 @@ int main() {
     for (const auto& topic : bsp.topics) {
         if (topic.name == "camera_data" && topic.encoding == "json_binary") {
             has_camera = true;
+            assert(topic.ui_max_hz == 30.0);
+            assert(topic.qos.value("history", std::string{}) == "latest");
+            assert(topic.qos.value("depth", 0) == 1);
+        }
+        if (topic.name == "imu_data") {
+            assert(topic.parse_mode == "type_vector6_fast");
         }
     }
     assert(has_camera);

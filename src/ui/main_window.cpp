@@ -21,15 +21,6 @@ namespace recordlab::host::ui {
 
 namespace {
 
-/// Default UI rate limits per topic category (Hz).
-double uiRateForTopic(const std::string& name) {
-    if (name == "imu_data")        return 30.0;
-    if (name == "record_timer")    return 10.0;
-    if (name == "time_delay")      return 10.0;
-    if (name == "motion_status")   return 5.0;
-    return 30.0;
-}
-
 bool isCheckCommand(const std::string& cmd) {
     return cmd == "check";
 }
@@ -169,7 +160,7 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
                 const auto config = agent_manager_->loadAgentConfig(agent_name);
                 std::vector<DataReceiver::TopicConfig> topics;
                 for (const auto& t : config.topics)
-                    topics.push_back({t.name, t.port, t.encoding, uiRateForTopic(t.name)});
+                    topics.push_back({t.name, t.port, t.encoding, t.parse_mode, t.ui_max_hz, t.qos});
                 data_receiver_->subscribe(config.subnode_host, topics);
             }
         }
