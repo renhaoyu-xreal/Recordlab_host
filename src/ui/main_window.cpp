@@ -30,6 +30,18 @@ double uiRateForTopic(const std::string& name) {
     return 30.0;
 }
 
+bool isCheckCommand(const std::string& cmd) {
+    return cmd == "check";
+}
+
+bool isCheckLogMessage(const QString& message) {
+    const QString trimmed = message.trimmed();
+    return trimmed.startsWith(QStringLiteral("发送命令: check "))
+        || trimmed == QStringLiteral("发送命令: check")
+        || trimmed.startsWith(QStringLiteral("check:"))
+        || trimmed.startsWith(QStringLiteral("check 失败:"));
+}
+
 }  // namespace
 
 MainWindow::MainWindow(std::string agents_config_path,
@@ -52,6 +64,9 @@ MainWindow::MainWindow(std::string agents_config_path,
     agent_manager_->start();
 
     data_receiver_ = std::make_unique<DataReceiver>(bus_);
+
+    watchdog_ = std::make_unique<Watchdog>(bus_);
+    watchdog_->start();
 
     scripts_actuator_ = std::make_unique<ScriptsActuator>(
         bus_, nodes_root_, echo_python_root_,
@@ -113,7 +128,10 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
     // ── DataReceiver messages ──
     if (m.type == msg::TOPIC_DATA) {
         const auto topic = m.payload.value("topic_name", std::string{});
-        const auto& value = m.payload["value"];
+        auto value = m.payload["value"];
+        if (m.payload.contains("stream_frequencies_hz") && value.is_object()) {
+            value["_stream_frequencies_hz"] = m.payload["stream_frequencies_hz"];
+        }
         const double freq = m.payload.value("frequency_hz", 0.0);
         const bool first = m.payload.value("first_message", false);
         const QString name = QString::fromStdString(topic);
@@ -128,6 +146,9 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
 
     // ── AgentManager messages ──
     if (m.type == msg::CMD_RESULT) {
+        if (isCheckCommand(m.payload.value("cmd", std::string{}))) {
+            return;
+        }
         emit commandFinished(
             QString::fromStdString(m.payload.value("cmd", "")),
             m.payload.value("success", false),
@@ -139,13 +160,16 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         return;
     }
     if (m.type == msg::AGENT_ACTIVATED) {
-        if (m.payload.value("success", false) && data_receiver_) {
+        if (m.payload.value("success", false)) {
             const auto agent_name = m.payload.value("agent_name", std::string{});
-            const auto config = agent_manager_->loadAgentConfig(agent_name);
-            std::vector<DataReceiver::TopicConfig> topics;
-            for (const auto& t : config.topics)
-                topics.push_back({t.name, t.port, t.encoding, uiRateForTopic(t.name)});
-            data_receiver_->subscribe(config.subnode_host, topics);
+            if (watchdog_) watchdog_->setActiveAgent(agent_name);
+            if (data_receiver_) {
+                const auto config = agent_manager_->loadAgentConfig(agent_name);
+                std::vector<DataReceiver::TopicConfig> topics;
+                for (const auto& t : config.topics)
+                    topics.push_back({t.name, t.port, t.encoding, uiRateForTopic(t.name)});
+                data_receiver_->subscribe(config.subnode_host, topics);
+            }
         }
         return;
     }
@@ -158,7 +182,10 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
 
     // ── Common ──
     if (m.type == msg::LOG_ENTRY) {
-        appendLog(QString::fromStdString(m.payload.value("message", "")));
+        const QString message = QString::fromStdString(m.payload.value("message", ""));
+        if (!isCheckLogMessage(message)) {
+            appendLog(message);
+        }
         return;
     }
     if (m.type == msg::SCRIPT_OUTPUT) {
@@ -181,19 +208,13 @@ void MainWindow::appendLog(const QString& message) {
 // ── Slots ──────────────────────────────────────────────────────
 
 void MainWindow::activateAgent(const QString& agent_name) {
-    // Stop old Watchdog if any.
-    if (watchdog_) {
-        watchdog_->stop();
-        watchdog_.reset();
-    }
+    if (watchdog_) watchdog_->clearActiveAgent();
     active_agent_ = agent_name;
     bus_.publish({
         .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::ACTIVATE_AGENT,
         .payload = {{"agent_name", agent_name.toStdString()}},
     });
-    // Start Watchdog in its own thread (PLAN.md T1).
-    watchdog_ = std::make_unique<Watchdog>(bus_, agent_name.toStdString());
-    watchdog_->start();
+    // Watchdog is already running; it binds to this agent after AGENT_ACTIVATED success.
 }
 
 void MainWindow::sendCommand(const QString& cmd, const QString& params_json) {

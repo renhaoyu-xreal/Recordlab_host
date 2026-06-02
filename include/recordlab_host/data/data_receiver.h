@@ -5,6 +5,8 @@
 #include "recordlab_host/data/sensor_queue.h"
 
 #include <chrono>
+#include <atomic>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -44,17 +46,27 @@ private:
     struct TopicState {
         std::chrono::steady_clock::time_point last_receive;
         std::chrono::steady_clock::time_point last_ui_publish;
+        std::chrono::steady_clock::time_point last_debug_log;
         double ui_max_hz = 30.0;
         bool first_message = true;
+        std::size_t receive_count = 0;
+        std::size_t publish_count = 0;
+        std::unordered_map<std::string, std::deque<double>> stream_receive_times;
+        std::unordered_map<std::string, double> stream_frequencies_hz;
     };
 
     void onTopicData(const std::string& topic_name, const nlohmann::json& value);
+    std::string streamKeyFor(const std::string& topic_name, const nlohmann::json& value) const;
+    double streamTimestampFor(const std::string& topic_name,
+                              const nlohmann::json& value,
+                              std::chrono::steady_clock::time_point now) const;
 
     HostMessageBus& bus_;
     SensorQueue sensor_queue_;
     std::vector<std::unique_ptr<EchoTopicSubscriber>> subscribers_;
     std::unordered_map<std::string, TopicState> topic_states_;
     std::mutex mutex_;
+    std::atomic<bool> accepting_data_{false};
 };
 
 }  // namespace recordlab::host

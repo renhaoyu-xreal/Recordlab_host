@@ -84,9 +84,20 @@ void AgentManager::handleMessage(const HostMessage& msg) {
     } else if (msg.type == msg::CMD_REQUEST) {
         const auto cmd = msg.payload.value("cmd", std::string{});
         const auto params = msg.payload.value("params", nlohmann::json::object());
-        doCmdRequest(cmd, params);
+        int timeout_ms = 5000;
+        if (cmd == "release_device" || cmd == "stop_device" || cmd == "estop") {
+            timeout_ms = 10000;
+        }
+        doCmdRequest(cmd, params, timeout_ms);
     } else if (msg.type == msg::INIT_DEVICE) {
-        doCmdRequest("init_device", {});
+        const auto agent_name = msg.payload.value("agent_name", active_agent_);
+        auto params = nlohmann::json::object();
+        if (!agent_name.empty()) {
+            params = AgentConfigLoader(agents_config_path_).loadAgent(agent_name).init_device_params;
+        }
+        doCmdRequest("init_device", params, 30000);
+    } else if (msg.type == msg::ESTOP) {
+        doCmdRequest("estop", nlohmann::json::object(), 10000);
     }
 }
 
@@ -133,14 +144,14 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
     }
 }
 
-void AgentManager::doCmdRequest(const std::string& cmd, const nlohmann::json& params) {
+void AgentManager::doCmdRequest(const std::string& cmd, const nlohmann::json& params, int timeout_ms) {
     if (!action_client_) {
         publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", false}, {"message", "当前没有可用 Agent client"}});
         return;
     }
     try {
         publishResult(msg::LOG_ENTRY, {{"message", "发送命令: " + cmd + " " + params.dump()}});
-        const auto result = action_client_->sendCommand(cmd, params, 5000);
+        const auto result = action_client_->sendCommand(cmd, params, timeout_ms);
         const auto message = result.result.value("message", result.result.dump());
         publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", result.success}, {"message", message}});
         publishResult(msg::LOG_ENTRY, {{"message", cmd + ": " + message}});
@@ -188,15 +199,16 @@ void AgentManager::startNodeProcess(const AgentConfig& config) {
 }
 
 bool AgentManager::ensureClient(const AgentConfig& config) {
-    if (!action_client_) {
-        action_client_ = std::make_unique<EchoActionClient>(
-            config.subnode_host, config.goal_port, config.feedback_port, 3000);
-    }
     for (int attempt = 0; attempt < 20; ++attempt) {
+        if (!action_client_) {
+            action_client_ = std::make_unique<EchoActionClient>(
+                config.subnode_host, config.goal_port, config.feedback_port, 3000);
+        }
         if (action_client_->waitForServer(1000)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
             return true;
         }
+        action_client_.reset();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     return false;

@@ -8,10 +8,13 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QGroupBox>
+#include <QImage>
 #include <QLabel>
 #include <QListWidget>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QTabWidget>
+#include <nlohmann/json.hpp>
 
 #include <cstdlib>
 #include <fstream>
@@ -83,6 +86,46 @@ int main(int argc, char** argv) {
     require(script_workspace->findChild<QWidget*>("curve_panel_1") != nullptr, "curve panel 1 missing");
     require(script_workspace->findChild<QWidget*>("curve_panel_2") != nullptr, "curve panel 2 missing");
     require(script_workspace->findChild<QWidget*>("curve_panel_3") != nullptr, "curve panel 3 missing");
+    auto* selected_label = script_workspace->findChild<QLabel*>("selected_data_label");
+    require(selected_label != nullptr, "selected data label missing");
+    require(selected_label->text() == QStringLiteral("当前选择: 未选择数据"), "selected data should start empty");
+    require(script_workspace->dataSelectionList()->item(0)->text() == QStringLiteral("IMU0-gyro [--Hz]"), "imu0 gyro initial rate should be unknown");
+    require(script_workspace->dataSelectionList()->item(3)->text() == QStringLiteral("IMU0-temperature [--Hz]"), "imu0 temperature initial rate should be unknown");
+    require(script_workspace->dataSelectionList()->item(6)->text() == QStringLiteral("IMU1-temperature [--Hz]"), "imu1 temperature initial rate should be unknown");
+
+    script_workspace->handleRealtimeData(QStringLiteral("imu_data"), nlohmann::json{
+        {"type", 1},
+        {"data", {1.0, 2.0, 3.0, 0.0, 0.0, 0.0}},
+    }, 1000.0);
+    require(script_workspace->dataSelectionList()->item(0)->text() == QStringLiteral("IMU0-gyro [1000Hz]"), "imu0 gyro live rate missing");
+    require(!script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("Hz")), "realtime values should not display hz");
+    require(script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("IMU0-gyro")), "realtime imu label missing");
+    require(selected_label->text() == QStringLiteral("当前选择: 未选择数据"), "realtime data should not change selected data");
+
+    script_workspace->dataSelectionList()->setCurrentRow(0);
+    QApplication::processEvents();
+    require(selected_label->text() == QStringLiteral("当前选择: IMU0-gyro"), "selected data should follow user list selection");
+
+    script_workspace->handleRealtimeData(QStringLiteral("camera_data"), nlohmann::json{
+        {"timestamp", 1},
+        {"cam_data", {
+            {"0", {
+                {"image", {
+                    {"width", 2},
+                    {"height", 2},
+                    {"format", static_cast<int>(QImage::Format_Grayscale8)},
+                    {"bytes_per_line", 2},
+                    {"data", {{"__echo_bytes_base64__", "AQIDBA=="}}},
+                }},
+            }},
+        }},
+    }, 30.0);
+    bool saw_camera_status = false;
+    for (const auto* label : script_workspace->findChild<QWidget*>("video_panel_1")->findChildren<QLabel*>()) {
+        saw_camera_status = saw_camera_status || label->text().contains(QStringLiteral("cam 0 | 2 x 2"));
+    }
+    require(saw_camera_status, "camera frame status missing");
+    require(selected_label->text() == QStringLiteral("当前选择: IMU0-gyro"), "camera frames should not change selected data");
 
     auto* data_workspace = workspace->dataPage()->sensorWorkspace();
     require(data_workspace->findChild<QWidget*>("video_panel_1") != nullptr, "data page video panel missing");

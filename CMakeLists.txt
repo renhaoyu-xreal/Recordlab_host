@@ -26,6 +26,7 @@ endif()
 
 add_library(recordlab_host
   include/recordlab_host/common/logger.h
+  include/recordlab_host/data/camera_shared_memory.h
   include/recordlab_host/scripts/scripts_actuator.h
   include/recordlab_host/lifecycle/agent_health_state.h
   include/recordlab_host/lifecycle/watchdog.h
@@ -49,6 +50,7 @@ add_library(recordlab_host
   src/communication/echo_topic_subscriber.cpp
   src/common/logger.cpp
   src/common/process_handle.cpp
+  src/data/camera_shared_memory.cpp
   src/data/sensor_queue.cpp
   src/lifecycle/watchdog.cpp
   src/data/data_receiver.cpp
@@ -71,6 +73,7 @@ target_link_libraries(recordlab_host PUBLIC
   ${ECHO_ZMQ_DIR}/lib/libzmq.a
   Qt6::Widgets
   pthread
+  rt
 )
 
 add_executable(recordlab_cli app/recordlab_cli.cpp)
@@ -86,6 +89,7 @@ foreach(test_name
   test_echo_topic_encoding
   test_host_message_bus
   test_process_handle
+  test_watchdog_lifecycle
   test_echo_python_integration
   test_ui_layout_contract
 )

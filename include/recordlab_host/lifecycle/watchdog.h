@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -16,12 +17,15 @@ namespace recordlab::host {
 class Watchdog {
 public:
     /// Maximum consecutive check failures before declaring DISCONNECTED.
-    static constexpr int kMaxCheckFailures = 3;
+    static constexpr int kMaxCheckFailures = 2;
     /// Interval between check attempts when DISCONNECTED (ms).
-    static constexpr int kCheckIntervalDisconnectedMs = 2000;
+    static constexpr int kCheckIntervalDisconnectedMs = 3000;
     /// Interval between checks when HEALTHY (ms).
-    static constexpr int kCheckIntervalHealthyMs = 5000;
+    static constexpr int kCheckIntervalHealthyMs = 6000;
+    /// Maximum init recovery attempts before staying ERROR.
+    static constexpr int kMaxInitRetries = 2;
 
+    explicit Watchdog(HostMessageBus& bus);
     Watchdog(HostMessageBus& bus, std::string agent_name);
     ~Watchdog();
 
@@ -34,6 +38,12 @@ public:
     /// Quick health query without blocking.
     AgentHealthState state() const;
 
+    /// Bind the watchdog to an activated agent and start initialization.
+    void setActiveAgent(std::string agent_name);
+
+    /// Stop monitoring the active agent without stopping the thread.
+    void clearActiveAgent();
+
     /// Trigger emergency stop → DISCONNECTED.
     void estop();
 
@@ -41,15 +51,21 @@ private:
     void workerLoop();
     AgentHealthState doCheck();
     AgentHealthState doInitDevice();
+    bool doRecoveryClose();
+    std::string activeAgent() const;
+    bool hasActiveAgent() const;
+    void publishState(AgentHealthState state, const nlohmann::json& extra = nlohmann::json::object());
 
     HostMessageBus& bus_;
     std::string agent_name_;
+    mutable std::mutex agent_mutex_;
 
     std::thread worker_;
     std::atomic<bool> running_{false};
     std::atomic<bool> estop_requested_{false};
     std::atomic<AgentHealthState> state_{AgentHealthState::DISCONNECTED};
     std::atomic<int> consecutive_failures_{0};
+    std::atomic<int> init_failures_{0};
 };
 
 }  // namespace recordlab::host

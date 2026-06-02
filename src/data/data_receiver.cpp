@@ -2,6 +2,8 @@
 #include "recordlab_host/bus/message_types.h"
 #include "recordlab_host/common/logger.h"
 
+#include <algorithm>
+#include <cmath>
 #include <sstream>
 
 namespace recordlab::host {
@@ -20,6 +22,63 @@ std::string describeTopics(const std::vector<DataReceiver::TopicConfig>& topics)
     return oss.str();
 }
 
+nlohmann::json frequenciesToJson(const std::unordered_map<std::string, double>& frequencies) {
+    nlohmann::json result = nlohmann::json::object();
+    for (const auto& [key, frequency] : frequencies) {
+        result[key] = frequency;
+    }
+    return result;
+}
+
+std::size_t estimateJsonBinaryBytes(const nlohmann::json& value) {
+    if (value.is_object()) {
+        const auto marker = value.find("__echo_bytes_base64__");
+        if (marker != value.end() && marker->is_string()) {
+            return marker->get<std::string>().size() * 3 / 4;
+        }
+    }
+    if (value.is_string()) {
+        return value.get<std::string>().size() * 3 / 4;
+    }
+    if (value.is_array()) {
+        return value.size();
+    }
+    return 0;
+}
+
+std::size_t estimatePayloadBytes(const nlohmann::json& value) {
+    if (value.is_object()) {
+        const auto cam_data = value.find("cam_data");
+        if (cam_data != value.end() && cam_data->is_object()) {
+            std::size_t total = 0;
+            for (const auto& [_, cam_info] : cam_data->items()) {
+                if (!cam_info.is_object()) continue;
+                const auto image = cam_info.find("image");
+                if (image == cam_info.end() || !image->is_object()) continue;
+                if (image->value("shm", false) || image->contains("shm_seq")) {
+                    total += image->dump().size();
+                    continue;
+                }
+                if (image->contains("data")) {
+                    total += estimateJsonBinaryBytes((*image)["data"]);
+                } else {
+                    total += static_cast<std::size_t>(image->value("bytes_per_line", 0))
+                        * static_cast<std::size_t>(image->value("height", 0));
+                }
+            }
+            return total;
+        }
+    }
+    return value.dump().size();
+}
+
+double secondsFromTimestampValue(double timestamp) {
+    if (timestamp <= 0.0) {
+        return 0.0;
+    }
+    return timestamp > 1e12 ? timestamp / 1e9 : timestamp;
+}
+
 }  // namespace
 
 DataReceiver::DataReceiver(HostMessageBus& bus) : bus_(bus) {
@@ -32,6 +91,7 @@ DataReceiver::~DataReceiver() {
 
 void DataReceiver::subscribe(const std::string& host, const std::vector<TopicConfig>& topics) {
     unsubscribeAll();
+    accepting_data_.store(false, std::memory_order_release);
     common::Logger::instance().log(
         common::LogLevel::Info,
         "DataReceiver",
@@ -43,11 +103,13 @@ void DataReceiver::subscribe(const std::string& host, const std::vector<TopicCon
             topic_states_[topic.name] = {
                 std::chrono::steady_clock::now(),
                 std::chrono::steady_clock::now(),
+                std::chrono::steady_clock::now(),
                 topic.ui_max_hz,
                 true,
             };
         }
     }
+    accepting_data_.store(true, std::memory_order_release);
 
     for (const auto& topic : topics) {
         subscribers_.push_back(std::make_unique<EchoTopicSubscriber>(
@@ -59,6 +121,11 @@ void DataReceiver::subscribe(const std::string& host, const std::vector<TopicCon
 }
 
 void DataReceiver::unsubscribeAll() {
+    accepting_data_.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        topic_states_.clear();
+    }
     if (!subscribers_.empty()) {
         common::Logger::instance().log(
             common::LogLevel::Info,
@@ -66,8 +133,6 @@ void DataReceiver::unsubscribeAll() {
             "unsubscribe topics count=" + std::to_string(subscribers_.size()));
     }
     subscribers_.clear();
-    std::lock_guard<std::mutex> lock(mutex_);
-    topic_states_.clear();
 }
 
 const SensorQueue& DataReceiver::sensorQueue() const {
@@ -75,10 +140,14 @@ const SensorQueue& DataReceiver::sensorQueue() const {
 }
 
 void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::json& value) {
+    if (!accepting_data_.load(std::memory_order_acquire)) {
+        return;
+    }
     const auto now = std::chrono::steady_clock::now();
     double frequency_hz = 0.0;
     bool should_publish = false;
     bool is_first = false;
+    nlohmann::json stream_frequencies = nlohmann::json::object();
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -86,6 +155,7 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
         if (it == topic_states_.end()) return;
 
         auto& state = it->second;
+        state.receive_count += 1;
 
         // Frequency estimation (instantaneous 1/dt).
         if (!state.first_message) {
@@ -98,6 +168,33 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
         state.first_message = false;
         state.last_receive = now;
 
+        const std::string stream_key = streamKeyFor(topic_name, value);
+        const double stream_ts = streamTimestampFor(topic_name, value, now);
+        auto& times = state.stream_receive_times[stream_key];
+        if (!times.empty() && stream_ts < times.back() - 1.0) {
+            times.clear();
+            state.stream_frequencies_hz[stream_key] = 0.0;
+        }
+        if (times.empty() || std::abs(stream_ts - times.back()) >= 1e-6) {
+            times.push_back(stream_ts);
+            const double cutoff = stream_ts - 1.0;
+            while (!times.empty() && times.front() < cutoff) {
+                times.pop_front();
+            }
+            if (times.size() >= 3) {
+                const std::size_t n = std::min<std::size_t>(times.size(), 50);
+                const double span = times.back() - times[times.size() - n];
+                if (span > 0.001) {
+                    state.stream_frequencies_hz[stream_key] = static_cast<double>(n - 1) / span;
+                }
+            }
+            if (times.size() > 5000) {
+                times.erase(times.begin(), times.end() - 2000);
+            }
+        }
+        frequency_hz = state.stream_frequencies_hz[stream_key];
+        stream_frequencies = frequenciesToJson(state.stream_frequencies_hz);
+
         // UI rate-limiting.
         if (state.ui_max_hz <= 0.0) {
             should_publish = true;
@@ -107,6 +204,26 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
             if (elapsed >= min_interval || is_first) {
                 should_publish = true;
                 state.last_ui_publish = now;
+            }
+        }
+        if (should_publish) {
+            state.publish_count += 1;
+        }
+
+        if (topic_name == "camera_data") {
+            const double debug_elapsed = std::chrono::duration<double>(now - state.last_debug_log).count();
+            if (debug_elapsed >= 1.0) {
+                common::Logger::instance().log(
+                    common::LogLevel::Debug,
+                    "DataReceiver",
+                    "camera_data recv_count=" + std::to_string(state.receive_count)
+                        + " ui_publish_count=" + std::to_string(state.publish_count)
+                        + " latest_hz=" + std::to_string(frequency_hz)
+                        + " payload_bytes_est=" + std::to_string(estimatePayloadBytes(value))
+                        + " ui_max_hz=" + std::to_string(state.ui_max_hz));
+                state.last_debug_log = now;
+                state.receive_count = 0;
+                state.publish_count = 0;
             }
         }
     }
@@ -125,10 +242,52 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
                 {"topic_name", topic_name},
                 {"value", value},
                 {"frequency_hz", frequency_hz},
+                {"stream_frequencies_hz", stream_frequencies},
                 {"first_message", is_first},
             },
         });
     }
+}
+
+std::string DataReceiver::streamKeyFor(const std::string& topic_name, const nlohmann::json& value) const {
+    if (topic_name == "imu_data" && value.is_object()) {
+        const auto type = value.find("type");
+        if (type != value.end() && type->is_number_integer()) {
+            return "imu:" + std::to_string(type->get<int>());
+        }
+    }
+    return topic_name;
+}
+
+double DataReceiver::streamTimestampFor(const std::string& topic_name,
+                                        const nlohmann::json& value,
+                                        std::chrono::steady_clock::time_point now) const {
+    if (topic_name == "imu_data" && value.is_object()) {
+        const auto ts = value.find("timestamp_ns");
+        if (ts != value.end() && ts->is_number()) {
+            const double seconds = ts->get<double>() / 1e9;
+            if (seconds > 0.0) {
+                return seconds;
+            }
+        }
+    }
+    if (topic_name == "camera_data" && value.is_object()) {
+        const auto ts = value.find("timestamp");
+        if (ts != value.end() && ts->is_number()) {
+            const double seconds = secondsFromTimestampValue(ts->get<double>());
+            if (seconds > 0.0) {
+                return seconds;
+            }
+        }
+        const auto ts_ns = value.find("timestamp_ns");
+        if (ts_ns != value.end() && ts_ns->is_number()) {
+            const double seconds = ts_ns->get<double>() / 1e9;
+            if (seconds > 0.0) {
+                return seconds;
+            }
+        }
+    }
+    return std::chrono::duration<double>(now.time_since_epoch()).count();
 }
 
 }  // namespace recordlab::host

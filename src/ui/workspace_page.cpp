@@ -1,5 +1,6 @@
 #include "recordlab_host/ui/workspace_page.h"
 
+#include "recordlab_host/common/logger.h"
 #include "recordlab_host/ui/data_page.h"
 #include "recordlab_host/ui/main_window.h"
 #include "recordlab_host/ui/sensor_workspace_widget.h"
@@ -13,6 +14,8 @@
 #include <QPushButton>
 #include <QTabWidget>
 #include <QVBoxLayout>
+
+#include <chrono>
 
 namespace recordlab::host::ui {
 
@@ -119,8 +122,27 @@ void WorkspacePage::bindMainWindow(MainWindow* mainWindow) {
         if (value.is_discarded()) {
             value = nlohmann::json::object();
         }
-        script_page_->sensorWorkspace()->handleRealtimeData(name, value, frequency);
-        data_page_->sensorWorkspace()->handleRealtimeData(name, value, frequency);
+        if (name == QStringLiteral("camera_data")) {
+            auto* active_workspace = tabs_->currentWidget() == script_page_
+                ? script_page_->sensorWorkspace()
+                : data_page_->sensorWorkspace();
+            active_workspace->handleRealtimeData(name, value, frequency);
+            static auto last_debug_log = std::chrono::steady_clock::time_point{};
+            const auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration<double>(now - last_debug_log).count() >= 1.0) {
+                common::Logger::instance().log(
+                    common::LogLevel::Debug,
+                    "WorkspacePage",
+                    "camera_data dispatched active_tab="
+                        + tabs_->tabText(tabs_->currentIndex()).toStdString()
+                        + " payload_json_bytes=" + std::to_string(value_json.size())
+                        + " ui_frequency_hz=" + std::to_string(frequency));
+                last_debug_log = now;
+            }
+        } else {
+            script_page_->sensorWorkspace()->handleRealtimeData(name, value, frequency);
+            data_page_->sensorWorkspace()->handleRealtimeData(name, value, frequency);
+        }
         if (name == QStringLiteral("imu_data") && !saw_imu_data_) {
             saw_imu_data_ = true;
             script_page_->logView()->appendPlainText(QStringLiteral("UI 已接收 imu_data，实时值区域开始刷新。"));
