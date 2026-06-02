@@ -54,7 +54,6 @@ void Watchdog::workerLoop() {
                 .source = msg::WATCHDOG, .target = msg::UI, .type = msg::WATCHDOG_STATE,
                 .payload = {{"state", ::recordlab::host::to_string(AgentHealthState::DISCONNECTED)}},
             });
-            // Publish estop to AgentManager.
             bus_.publish({
                 .source = msg::WATCHDOG, .target = msg::AGENT_MANAGER, .type = msg::ESTOP,
                 .payload = {{"agent_name", agent_name_}},
@@ -69,18 +68,17 @@ void Watchdog::workerLoop() {
         case AgentHealthState::DISCONNECTED:
             next = doCheck();
             if (next == AgentHealthState::INITIALIZING) {
+                // check succeeded first time; immediately attempt init_device.
                 next = doInitDevice();
             }
             break;
         case AgentHealthState::INITIALIZING:
-            // Should only be here transiently; fall through to check.
-            next = doCheck();
+            // Do not check while init_device is in progress.
+            // This state is transient and should only be reached if
+            // doInitDevice is taking longer than one cycle.
             break;
         case AgentHealthState::HEALTHY:
             next = doCheck();
-            if (next == AgentHealthState::DISCONNECTED) {
-                // Check failed, fall back.
-            }
             break;
         }
 
@@ -116,13 +114,11 @@ AgentHealthState Watchdog::doCheck() {
     common::Logger::instance().log(common::LogLevel::Debug, "Watchdog",
         "sending check for agent=" + agent_name_);
 
-    // Send check command via shared bus to AgentManager.
     bus_.publish({
         .source = msg::WATCHDOG, .target = msg::AGENT_MANAGER, .type = msg::CMD_REQUEST,
         .payload = {{"cmd", "check"}, {"params", nlohmann::json::object()}},
     });
 
-    // Wait for CMD_RESULT from AgentManager (up to 3 seconds).
     auto opt = bus_.waitFor(msg::WATCHDOG, 3000);
     if (!opt || opt->type != msg::CMD_RESULT) {
         consecutive_failures_++;
@@ -133,7 +129,6 @@ AgentHealthState Watchdog::doCheck() {
         if (consecutive_failures_ >= kMaxCheckFailures) {
             return AgentHealthState::DISCONNECTED;
         }
-        // Stay in current state for transient failures.
         return state_.load();
     }
 
@@ -149,7 +144,6 @@ AgentHealthState Watchdog::doCheck() {
         return state_.load();
     }
 
-    // Check succeeded.
     consecutive_failures_ = 0;
     if (state_.load() == AgentHealthState::DISCONNECTED) {
         return AgentHealthState::INITIALIZING;
@@ -161,13 +155,11 @@ AgentHealthState Watchdog::doInitDevice() {
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
         "triggering init_device for agent=" + agent_name_);
 
-    // Tell AgentManager to init_device.
     bus_.publish({
         .source = msg::WATCHDOG, .target = msg::AGENT_MANAGER, .type = msg::INIT_DEVICE,
         .payload = {{"agent_name", agent_name_}},
     });
 
-    // AgentManager will handle init_device and publish CMD_RESULT.
     auto opt = bus_.waitFor(msg::WATCHDOG, 10000);
     if (!opt || opt->type != msg::CMD_RESULT) {
         common::Logger::instance().log(common::LogLevel::Error, "Watchdog",
