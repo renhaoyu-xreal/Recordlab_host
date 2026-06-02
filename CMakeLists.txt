@@ -72,11 +72,11 @@ target_link_libraries(recordlab_host PUBLIC
   pthread
 )
 
-add_executable(recordlab_cli tools/recordlab_cli.cpp)
+add_executable(recordlab_cli app/recordlab_cli.cpp)
 target_link_libraries(recordlab_cli PRIVATE recordlab_host)
 
-add_executable(recordlab_master_app tools/recordlab_master_app.cpp)
-target_link_libraries(recordlab_master_app PRIVATE recordlab_host)
+add_executable(recordlab_host_app app/recordlab_host_app.cpp)
+target_link_libraries(recordlab_host_app PRIVATE recordlab_host)
 
 enable_testing()
 
