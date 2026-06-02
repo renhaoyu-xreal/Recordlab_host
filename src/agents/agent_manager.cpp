@@ -82,11 +82,14 @@ void AgentManager::handleMessage(const HostMessage& msg) {
         const auto agent_name = msg.payload.value("agent_name", std::string{});
         doActivateAgent(agent_name);
     } else if (msg.type == msg::CMD_REQUEST) {
+        const auto agent_name = msg.payload.value("agent_name", active_agent_);
         const auto cmd = msg.payload.value("cmd", std::string{});
         const auto params = msg.payload.value("params", nlohmann::json::object());
-        doCmdRequest(cmd, params);
+        const auto silent = msg.payload.value("silent", false);
+        doCmdRequest(agent_name, cmd, params, silent);
     } else if (msg.type == msg::INIT_DEVICE) {
-        doCmdRequest("init_device", {});
+        const auto agent_name = msg.payload.value("agent_name", active_agent_);
+        doCmdRequest(agent_name, "init_device", {}, false);
     }
 }
 
@@ -133,20 +136,51 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
     }
 }
 
-void AgentManager::doCmdRequest(const std::string& cmd, const nlohmann::json& params) {
+void AgentManager::doCmdRequest(const std::string& agent_name, const std::string& cmd,
+                                const nlohmann::json& params, bool silent) {
+    if (!agent_name.empty() && !active_agent_.empty() && agent_name != active_agent_) {
+        publishResult(msg::CMD_RESULT, {
+            {"agent_name", agent_name},
+            {"cmd", cmd},
+            {"success", false},
+            {"message", "请求 Agent 与当前 active Agent 不一致: " + agent_name + " != " + active_agent_},
+        });
+        return;
+    }
     if (!action_client_) {
-        publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", false}, {"message", "当前没有可用 Agent client"}});
+        publishResult(msg::CMD_RESULT, {
+            {"agent_name", agent_name},
+            {"cmd", cmd},
+            {"success", false},
+            {"message", "当前没有可用 Agent client"},
+        });
         return;
     }
     try {
-        publishResult(msg::LOG_ENTRY, {{"message", "发送命令: " + cmd + " " + params.dump()}});
+        if (!silent) {
+            publishResult(msg::LOG_ENTRY, {{"message", "发送命令: " + cmd + " " + params.dump()}});
+        }
         const auto result = action_client_->sendCommand(cmd, params, 5000);
         const auto message = result.result.value("message", result.result.dump());
-        publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", result.success}, {"message", message}});
-        publishResult(msg::LOG_ENTRY, {{"message", cmd + ": " + message}});
+        publishResult(msg::CMD_RESULT, {
+            {"agent_name", agent_name},
+            {"cmd", cmd},
+            {"success", result.success},
+            {"message", message},
+        });
+        if (!silent) {
+            publishResult(msg::LOG_ENTRY, {{"message", cmd + ": " + message}});
+        }
     } catch (const std::exception& e) {
-        publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", false}, {"message", e.what()}});
-        publishResult(msg::LOG_ENTRY, {{"message", cmd + " 失败: " + std::string(e.what())}});
+        publishResult(msg::CMD_RESULT, {
+            {"agent_name", agent_name},
+            {"cmd", cmd},
+            {"success", false},
+            {"message", e.what()},
+        });
+        if (!silent) {
+            publishResult(msg::LOG_ENTRY, {{"message", cmd + " 失败: " + std::string(e.what())}});
+        }
     }
 }
 

@@ -37,7 +37,8 @@ private:
     void workerLoop();
     void handleMessage(const HostMessage& msg);
     void doActivateAgent(const std::string& agent_name);
-    void doCmdRequest(const std::string& cmd, const nlohmann::json& params);
+    void doCmdRequest(const std::string& agent_name, const std::string& cmd,
+                      const nlohmann::json& params, bool silent);
     void doShutdownAgent();
 
     void startNodeProcess(const AgentConfig& config);

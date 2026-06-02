@@ -2,9 +2,19 @@
 #include "recordlab_host/bus/message_types.h"
 #include "recordlab_host/common/logger.h"
 
+#include <chrono>
 #include <sstream>
 
 namespace recordlab::host {
+namespace {
+
+std::string makeWatchdogRequestId(const std::string& agent_name, const std::string& cmd) {
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    return "wd_" + agent_name + "_" + cmd + "_" + std::to_string(ms);
+}
+
+}  // namespace
 
 Watchdog::Watchdog(HostMessageBus& bus, std::string agent_name)
     : bus_(bus), agent_name_(std::move(agent_name)) {
@@ -114,9 +124,18 @@ AgentHealthState Watchdog::doCheck() {
     common::Logger::instance().log(common::LogLevel::Debug, "Watchdog",
         "sending check for agent=" + agent_name_);
 
+    const auto request_id = makeWatchdogRequestId(agent_name_, "check");
     bus_.publish({
+        .request_id = request_id,
         .source = msg::WATCHDOG, .target = msg::AGENT_MANAGER, .type = msg::CMD_REQUEST,
-        .payload = {{"cmd", "check"}, {"params", nlohmann::json::object()}},
+        .payload = {
+            {"request_id", request_id},
+            {"agent_name", agent_name_},
+            {"cmd", "check"},
+            {"params", nlohmann::json::object()},
+            {"priority", "high"},
+            {"silent", true},
+        },
     });
 
     auto opt = bus_.waitFor(msg::WATCHDOG, 3000);
