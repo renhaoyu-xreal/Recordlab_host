@@ -1,15 +1,16 @@
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-
 #include "recordlab_host/common/process_handle.h"
+#include "recordlab_host/common/logger.h"
 
+#include <cerrno>
+#include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
-#include <spawn.h>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -43,8 +44,92 @@ std::vector<std::string> buildEnvironment(const std::string& pythonpath) {
     return env;
 }
 
+void setEnvironmentValue(std::vector<std::string>& env,
+                         const std::string& key,
+                         const std::string& value) {
+    const std::string prefix = key + "=";
+    for (auto& entry : env) {
+        if (entry.rfind(prefix, 0) == 0) {
+            entry = prefix + value;
+            return;
+        }
+    }
+    env.push_back(prefix + value);
+}
+
 std::runtime_error spawnError(const char* action, int error_code) {
     return std::runtime_error(std::string(action) + " failed: " + std::strerror(error_code));
+}
+
+std::vector<std::string> splitPath(const char* path_env) {
+    const std::string path = path_env && *path_env ? path_env : "/usr/local/bin:/usr/bin:/bin";
+    std::vector<std::string> parts;
+    std::stringstream stream(path);
+    std::string item;
+    while (std::getline(stream, item, ':')) {
+        parts.push_back(item.empty() ? "." : item);
+    }
+    return parts;
+}
+
+std::string resolveExecutable(const std::string& program) {
+    if (program.empty()) {
+        throw std::runtime_error("Process executable cannot be empty");
+    }
+    if (program.find('/') != std::string::npos) {
+        if (::access(program.c_str(), X_OK) == 0) {
+            return program;
+        }
+        const int error_code = errno;
+        throw std::runtime_error("Executable is not runnable: " + program +
+                                 ": " + std::strerror(error_code));
+    }
+    for (const auto& dir : splitPath(std::getenv("PATH"))) {
+        std::string candidate = dir + "/" + program;
+        if (::access(candidate.c_str(), X_OK) == 0) {
+            return candidate;
+        }
+    }
+    throw std::runtime_error("Executable not found in PATH: " + program);
+}
+
+std::vector<char*> mutablePointers(std::vector<std::string>& values) {
+    std::vector<char*> pointers;
+    pointers.reserve(values.size() + 1);
+    for (auto& value : values) {
+        pointers.push_back(value.data());
+    }
+    pointers.push_back(nullptr);
+    return pointers;
+}
+
+std::string formatArgs(const std::vector<std::string>& args) {
+    std::ostringstream oss;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) {
+            oss << ' ';
+        }
+        if (args[i].find_first_of(" \t\n\"'") == std::string::npos) {
+            oss << args[i];
+        } else {
+            oss << '"';
+            for (const char c : args[i]) {
+                if (c == '"' || c == '\\') {
+                    oss << '\\';
+                }
+                oss << c;
+            }
+            oss << '"';
+        }
+    }
+    return oss.str();
+}
+
+void writeExecErrorAndExit(int fd, int error_code) {
+    const int saved_errno = error_code;
+    ssize_t ignored = ::write(fd, &saved_errno, sizeof(saved_errno));
+    (void)ignored;
+    _exit(127);
 }
 
 }  // namespace
@@ -60,70 +145,130 @@ void ProcessHandle::start(const std::vector<std::string>& args,
         throw std::runtime_error("Process args cannot be empty");
     }
 
-    posix_spawn_file_actions_t file_actions;
-    int rc = posix_spawn_file_actions_init(&file_actions);
-    if (rc != 0) {
-        throw spawnError("posix_spawn_file_actions_init", rc);
-    }
+    terminate();
 
-    auto cleanup = [&file_actions]() {
-        posix_spawn_file_actions_destroy(&file_actions);
-    };
-    auto add_action = [&](int error_code, const char* action) {
-        if (error_code != 0) {
-            cleanup();
-            throw spawnError(action, error_code);
-        }
-    };
-
-    add_action(posix_spawn_file_actions_addopen(
-                   &file_actions, STDIN_FILENO, "/dev/null", O_RDWR, 0),
-               "posix_spawn_file_actions_addopen");
-    add_action(posix_spawn_file_actions_adddup2(
-                   &file_actions, STDIN_FILENO, STDOUT_FILENO),
-               "posix_spawn_file_actions_adddup2 stdout");
-    add_action(posix_spawn_file_actions_adddup2(
-                   &file_actions, STDIN_FILENO, STDERR_FILENO),
-               "posix_spawn_file_actions_adddup2 stderr");
-    if (!cwd.empty()) {
-        add_action(posix_spawn_file_actions_addchdir_np(&file_actions, cwd.c_str()),
-                   "posix_spawn_file_actions_addchdir_np");
-    }
-
-    std::vector<char*> argv;
-    argv.reserve(args.size() + 1);
-    for (const auto& arg : args) {
-        argv.push_back(const_cast<char*>(arg.c_str()));
-    }
-    argv.push_back(nullptr);
-
+    std::vector<std::string> argv_storage = args;
+    argv_storage[0] = resolveExecutable(argv_storage[0]);
+    std::vector<char*> argv = mutablePointers(argv_storage);
     std::vector<std::string> env_storage = buildEnvironment(pythonpath);
-    std::vector<char*> envp;
-    envp.reserve(env_storage.size() + 1);
-    for (auto& entry : env_storage) {
-        envp.push_back(entry.data());
-    }
-    envp.push_back(nullptr);
+    setEnvironmentValue(env_storage, "PYTHONUNBUFFERED", "1");
+    std::vector<char*> envp = mutablePointers(env_storage);
+    const std::string child_output_path = common::Logger::instance().allLogPath();
+    common::Logger::instance().log(
+        common::LogLevel::Info,
+        "ProcessHandle",
+        "starting process: argv=" + formatArgs(argv_storage) +
+            ", cwd=" + (cwd.empty() ? std::string("<inherit>") : cwd) +
+            ", stdout_stderr=" + (child_output_path.empty() ? std::string("/dev/null") : child_output_path));
 
-    pid_t child_pid = -1;
-    rc = posix_spawnp(&child_pid, argv[0], &file_actions, nullptr, argv.data(), envp.data());
-    cleanup();
-    if (rc != 0) {
-        throw spawnError("posix_spawnp", rc);
+    int error_pipe[2] = {-1, -1};
+    if (::pipe2(error_pipe, O_CLOEXEC) != 0) {
+        throw spawnError("pipe2", errno);
+    }
+
+    pid_t child_pid = ::vfork();
+    if (child_pid < 0) {
+        const int error_code = errno;
+        ::close(error_pipe[0]);
+        ::close(error_pipe[1]);
+        throw spawnError("vfork", error_code);
+    }
+
+    if (child_pid == 0) {
+        ::close(error_pipe[0]);
+        if (::setpgid(0, 0) != 0) {
+            writeExecErrorAndExit(error_pipe[1], errno);
+        }
+        if (::prctl(PR_SET_PDEATHSIG, SIGTERM) != 0) {
+            writeExecErrorAndExit(error_pipe[1], errno);
+        }
+        if (::getppid() == 1) {
+            writeExecErrorAndExit(error_pipe[1], ESRCH);
+        }
+        const char* output_path = child_output_path.empty() ? "/dev/null" : child_output_path.c_str();
+        const int output_flags = child_output_path.empty()
+            ? O_RDWR
+            : (O_WRONLY | O_CREAT | O_APPEND);
+        int output_fd = ::open(output_path, output_flags, 0644);
+        if (output_fd < 0) {
+            writeExecErrorAndExit(error_pipe[1], errno);
+        }
+        int input_fd = ::open("/dev/null", O_RDONLY);
+        if (input_fd < 0) {
+            writeExecErrorAndExit(error_pipe[1], errno);
+        }
+        if (::dup2(input_fd, STDIN_FILENO) < 0 ||
+            ::dup2(output_fd, STDOUT_FILENO) < 0 ||
+            ::dup2(output_fd, STDERR_FILENO) < 0) {
+            writeExecErrorAndExit(error_pipe[1], errno);
+        }
+        if (input_fd > STDERR_FILENO) {
+            ::close(input_fd);
+        }
+        if (output_fd > STDERR_FILENO) {
+            ::close(output_fd);
+        }
+        if (!cwd.empty() && ::chdir(cwd.c_str()) != 0) {
+            writeExecErrorAndExit(error_pipe[1], errno);
+        }
+        ::execve(argv[0], argv.data(), envp.data());
+        writeExecErrorAndExit(error_pipe[1], errno);
+    }
+
+    ::close(error_pipe[1]);
+    int child_error = 0;
+    ssize_t bytes_read = 0;
+    do {
+        bytes_read = ::read(error_pipe[0], &child_error, sizeof(child_error));
+    } while (bytes_read < 0 && errno == EINTR);
+    ::close(error_pipe[0]);
+
+    if (bytes_read == static_cast<ssize_t>(sizeof(child_error))) {
+        int status = 0;
+        while (::waitpid(child_pid, &status, 0) < 0 && errno == EINTR) {
+        }
+        throw spawnError("execve", child_error);
+    }
+    if (bytes_read < 0) {
+        const int error_code = errno;
+        ::kill(-child_pid, SIGKILL);
+        int status = 0;
+        while (::waitpid(child_pid, &status, 0) < 0 && errno == EINTR) {
+        }
+        throw spawnError("read exec status", error_code);
     }
     pid_ = child_pid;
+    common::Logger::instance().log(
+        common::LogLevel::Info,
+        "ProcessHandle",
+        "started process pid=" + std::to_string(pid_) + ", argv=" + formatArgs(argv_storage));
 }
 
 void ProcessHandle::terminate() {
     if (pid_ <= 0) {
         return;
     }
-    kill(pid_, SIGTERM);
+    const int child_pid = pid_;
+    common::Logger::instance().log(
+        common::LogLevel::Info,
+        "ProcessHandle",
+        "terminating process pid=" + std::to_string(child_pid));
+    ::kill(-child_pid, SIGTERM);
+    ::kill(child_pid, SIGTERM);
     if (wait(3000) == -1 && pid_ > 0) {
-        kill(pid_, SIGKILL);
+        common::Logger::instance().log(
+            common::LogLevel::Warn,
+            "ProcessHandle",
+            "process pid=" + std::to_string(child_pid) + " did not exit after SIGTERM; sending SIGKILL");
+        ::kill(-child_pid, SIGKILL);
+        ::kill(child_pid, SIGKILL);
         wait(1000);
     }
     pid_ = -1;
+    common::Logger::instance().log(
+        common::LogLevel::Info,
+        "ProcessHandle",
+        "terminated process pid=" + std::to_string(child_pid));
 }
 
 int ProcessHandle::wait(int timeout_ms) {
@@ -136,8 +281,26 @@ int ProcessHandle::wait(int timeout_ms) {
     while (waited <= timeout_ms) {
         pid_t result = waitpid(pid_, &status, WNOHANG);
         if (result == pid_) {
+            const int finished_pid = pid_;
             pid_ = -1;
+            common::Logger::instance().log(
+                common::LogLevel::Info,
+                "ProcessHandle",
+                "process pid=" + std::to_string(finished_pid) + " exited status=" + std::to_string(status));
             return status;
+        }
+        if (result < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == ECHILD) {
+                pid_ = -1;
+                return 0;
+            }
+            return -1;
+        }
+        if (timeout_ms <= 0) {
+            return -1;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
         waited += sleep_ms;

@@ -1,11 +1,27 @@
 #include "recordlab_host/agents/agent_manager.h"
 #include "recordlab_host/bus/message_types.h"
+#include "recordlab_host/common/logger.h"
 
 #include <chrono>
 #include <cstdlib>
+#include <sstream>
 #include <thread>
 
 namespace recordlab::host {
+namespace {
+
+std::string describeTopics(const std::vector<TopicConfig>& topics) {
+    std::ostringstream oss;
+    for (std::size_t i = 0; i < topics.size(); ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << topics[i].name << "@" << topics[i].port << "/" << topics[i].encoding;
+    }
+    return oss.str();
+}
+
+}  // namespace
 
 AgentManager::AgentManager(HostMessageBus& bus, std::string agents_config_path,
                            std::string nodes_root, std::string echo_python_root)
@@ -72,6 +88,15 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
         active_agent_ = agent_name;
         const auto config = AgentConfigLoader(agents_config_path_).loadAgent(agent_name);
         publishToUI(msg::LOG_ENTRY, {{"message", "启动 Agent: " + agent_name}});
+        common::Logger::instance().log(
+            common::LogLevel::Info,
+            "AgentManager",
+            "activate agent=" + config.name +
+                ", node_class=" + config.node_class +
+                ", action=" + config.action_name +
+                ", goal_port=" + std::to_string(config.goal_port) +
+                ", feedback_port=" + std::to_string(config.feedback_port) +
+                ", topics=[" + describeTopics(config.topics) + "]");
         startNodeProcess(config);
         if (ensureClient(config)) {
             publishToUI(msg::WATCHDOG_STATE, {{"state", "HEALTHY"}});
@@ -144,6 +169,13 @@ void AgentManager::startNodeProcess(const AgentConfig& config) {
     const std::string pythonpath = nodes_root_ + ":" + echo_python_root_;
     const char* python_bin_env = std::getenv("RECORDLAB_PYTHON_BIN");
     const std::string python_bin = python_bin_env && *python_bin_env ? python_bin_env : "python3.10";
+    common::Logger::instance().log(
+        common::LogLevel::Info,
+        "AgentManager",
+        "launch node_runtime agent=" + config.name +
+            ", python=" + python_bin +
+            ", cwd=" + nodes_root_ +
+            ", pythonpath=" + pythonpath);
     node_process_->start(
         {python_bin, "-m", "recordlab_nodes.core.node_runtime",
          "--config", agents_config_path_, "--agent", config.name},

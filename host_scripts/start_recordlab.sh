@@ -8,6 +8,15 @@ NODES_ROOT="${RECORDLAB_NODES_ROOT:-${THIRD_PARTY_ROOT}/Recordlab_nodes}"
 AGENTS_CONFIG="${RECORDLAB_AGENTS_CONFIG:-${NODES_ROOT}/config/agents_config.json}"
 APP_BIN="${HOST_ROOT}/build/recordlab_host_app"
 VENV_DIR="${RECORDLAB_VENV_DIR:-${HOST_ROOT}/.venv-py310}"
+RUN_ID="$(date +%Y%m%d_%H%M%S)"
+export RECORDLAB_LOG_DIR="${RECORDLAB_LOG_DIR:-${HOST_ROOT}/logs/recordlab_${RUN_ID}}"
+export RECORDLAB_TERMINAL_TEE_ACTIVE=1
+mkdir -p "${RECORDLAB_LOG_DIR}"
+
+exec > >(tee -a "${RECORDLAB_LOG_DIR}/all.log") 2>&1
+
+echo "[recordlab] log dir: ${RECORDLAB_LOG_DIR}"
+echo "[recordlab] terminal output is mirrored to ${RECORDLAB_LOG_DIR}/all.log"
 
 if [[ -x "${VENV_DIR}/bin/python" ]]; then
   export RECORDLAB_PYTHON_BIN="${RECORDLAB_PYTHON_BIN:-${VENV_DIR}/bin/python}"
@@ -49,9 +58,9 @@ if [[ ! -x "${APP_BIN}" ]]; then
 fi
 
 echo "[recordlab] cleaning old RecordLab processes"
-pkill -f "recordlab_master_app" 2>/dev/null || true
-pkill -f "recordlab_host_app" 2>/dev/null || true
-pkill -f "recordlab_nodes.core.node_runtime" 2>/dev/null || true
+pkill -x "recordlab_master_app" 2>/dev/null || true
+pkill -x "recordlab_host_app" 2>/dev/null || true
+pkill -f "[p]ython.*-m recordlab_nodes\\.core\\.node_runtime" 2>/dev/null || true
 
 echo "[recordlab] starting UI"
 exec "${APP_BIN}" "${AGENTS_CONFIG}"

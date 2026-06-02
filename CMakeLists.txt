@@ -84,6 +84,7 @@ foreach(test_name
   test_agent_config_loader
   test_echo_topic_encoding
   test_host_message_bus
+  test_process_handle
   test_echo_python_integration
   test_imu_runtime_bridge
   test_ui_layout_contract

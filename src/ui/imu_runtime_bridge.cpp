@@ -45,9 +45,14 @@ ImuRuntimeBridge::ImuRuntimeBridge(std::string agents_config_path, QObject* pare
         : QString::fromLocal8Bit(echo_root_env);
 
     // Logging.
-    const QString run_folder = QStringLiteral("recordlab_%1")
-        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
-    log_dir_path_ = QDir(host_root_).filePath(QStringLiteral("logs/") + run_folder);
+    const QByteArray log_dir_env = qgetenv("RECORDLAB_LOG_DIR");
+    if (!log_dir_env.isEmpty()) {
+        log_dir_path_ = QString::fromLocal8Bit(log_dir_env);
+    } else {
+        const QString run_folder = QStringLiteral("recordlab_%1")
+            .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
+        log_dir_path_ = QDir(host_root_).filePath(QStringLiteral("logs/") + run_folder);
+    }
     QDir().mkpath(log_dir_path_);
     log_ui_path_ = QDir(log_dir_path_).filePath(QStringLiteral("ui.log"));
     log_all_path_ = QDir(log_dir_path_).filePath(QStringLiteral("all.log"));
@@ -55,6 +60,8 @@ ImuRuntimeBridge::ImuRuntimeBridge(std::string agents_config_path, QObject* pare
     appendLog(QStringLiteral("日志目录: %1").arg(log_dir_path_));
     appendLog(QStringLiteral("UI 日志: %1").arg(log_ui_path_));
     appendLog(QStringLiteral("全量日志: %1").arg(log_all_path_));
+    appendLog(QStringLiteral("Host app: %1").arg(QCoreApplication::applicationFilePath()));
+    appendLog(QStringLiteral("Agents config: %1").arg(QString::fromStdString(agents_config_path_)));
     appendLog(QStringLiteral("Nodes root: %1").arg(nodes_root_));
     appendLog(QStringLiteral("Echo Python root: %1").arg(echo_python_root_));
 

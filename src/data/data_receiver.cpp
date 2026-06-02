@@ -1,7 +1,26 @@
 #include "recordlab_host/data/data_receiver.h"
 #include "recordlab_host/bus/message_types.h"
+#include "recordlab_host/common/logger.h"
+
+#include <sstream>
 
 namespace recordlab::host {
+namespace {
+
+std::string describeTopics(const std::vector<DataReceiver::TopicConfig>& topics) {
+    std::ostringstream oss;
+    for (std::size_t i = 0; i < topics.size(); ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << topics[i].name << "@" << topics[i].port
+            << "/" << topics[i].encoding
+            << " ui_max_hz=" << topics[i].ui_max_hz;
+    }
+    return oss.str();
+}
+
+}  // namespace
 
 DataReceiver::DataReceiver(HostMessageBus& bus) : bus_(bus) {
     bus_.registerConsumer(msg::UI);
@@ -13,6 +32,10 @@ DataReceiver::~DataReceiver() {
 
 void DataReceiver::subscribe(const std::string& host, const std::vector<TopicConfig>& topics) {
     unsubscribeAll();
+    common::Logger::instance().log(
+        common::LogLevel::Info,
+        "DataReceiver",
+        "subscribe host=" + host + ", topics=[" + describeTopics(topics) + "]");
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -36,6 +59,12 @@ void DataReceiver::subscribe(const std::string& host, const std::vector<TopicCon
 }
 
 void DataReceiver::unsubscribeAll() {
+    if (!subscribers_.empty()) {
+        common::Logger::instance().log(
+            common::LogLevel::Info,
+            "DataReceiver",
+            "unsubscribe topics count=" + std::to_string(subscribers_.size()));
+    }
     subscribers_.clear();
     std::lock_guard<std::mutex> lock(mutex_);
     topic_states_.clear();

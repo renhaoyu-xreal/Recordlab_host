@@ -1,5 +1,6 @@
 #include "recordlab_host/scripts/scripts_actuator.h"
 #include "recordlab_host/bus/message_types.h"
+#include "recordlab_host/common/logger.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -57,6 +58,12 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
                QStringLiteral(":") + env.value(QStringLiteral("PYTHONPATH")));
     env.insert(QStringLiteral("RECORDLAB_AGENT"), QString::fromStdString(agent_name));
     env.insert(QStringLiteral("RECORDLAB_AGENTS_CONFIG"), agents_config_path_);
+    env.insert(QStringLiteral("PYTHONUNBUFFERED"), QStringLiteral("1"));
+    const std::string all_log_path = common::Logger::instance().allLogPath();
+    if (!all_log_path.empty()) {
+        env.insert(QStringLiteral("RECORDLAB_LOG_DIR"),
+                   QFileInfo(QString::fromStdString(all_log_path)).dir().absolutePath());
+    }
     script_process_->setProcessEnvironment(env);
 
     connect(script_process_.get(), &QProcess::readyReadStandardOutput, this, [this]() {
