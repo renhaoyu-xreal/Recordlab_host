@@ -3,6 +3,7 @@
 #include "recordlab_host/agents/agent_manager.h"
 #include "recordlab_host/bus/host_message_bus.h"
 #include "recordlab_host/data/data_receiver.h"
+#include "recordlab_host/lifecycle/watchdog.h"
 #include "recordlab_host/scripts/scripts_actuator.h"
 
 #include <QMainWindow>
@@ -67,6 +68,7 @@ private:
     // ── Architecture components (PLAN.md) ──────────────────────
     HostMessageBus bus_;
     std::unique_ptr<AgentManager> agent_manager_;
+    std::unique_ptr<Watchdog> watchdog_;
     std::unique_ptr<DataReceiver> data_receiver_;
     std::unique_ptr<ScriptsActuator> scripts_actuator_;
     QTimer* bus_poll_timer_ = nullptr;

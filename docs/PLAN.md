@@ -523,14 +523,14 @@ Host 单元测试：
 
 执行中发现并修正的问题：
 
-- **删除 `ImuRuntimeBridge`**：早期实现中 `ImuRuntimeBridge` 作为 UI 适配层，实际上充当了所有后端组件（AgentManager、DataReceiver、ScriptsActuator）的创建者、配置者和协调者，与 PLAN.md 中各组件独立线程的架构设计矛盾。已将 Logger 初始化上移到 `app/recordlab_host_app.cpp` 入口，AgentManager/DataReceiver/ScriptsActuator 生命周期移入 `MainWindow`，总线轮询和 Qt 信号转换也在 `MainWindow` 中直接完成。删除了 `include/recordlab_host/ui/imu_runtime_bridge.h`、`src/ui/imu_runtime_bridge.cpp` 和 `tests/test_imu_runtime_bridge.cpp`。
-- **添加启动/关闭进程清理**：启动时 `recordlab_host_app` 通过 `ProcessHandle::killByCmdlinePattern("recordlab_nodes.core.node_runtime")` 扫描 `/proc` 目录清理残留的 node_runtime 进程（先 SIGTERM，3 秒后 SIGKILL）。关闭时 `MainWindow::~MainWindow()` 按序销毁 ScriptsActuator → DataReceiver → AgentManager，后者通过 `ProcessHandle::terminate()` 先 SIGTERM 进程组后 SIGKILL 确保子进程完全终止。
+- 删除 `ImuRuntimeBridge`：早期实现中 `ImuRuntimeBridge` 作为 UI 适配层，实际上充当了所有后端组件（AgentManager、DataReceiver、ScriptsActuator）的创建者、配置者和协调者，与 PLAN.md 中各组件独立线程的架构设计矛盾。已将 Logger 初始化上移到 `app/recordlab_host_app.cpp` 入口，AgentManager/DataReceiver/ScriptsActuator 生命周期移入 `MainWindow`，总线轮询和 Qt 信号转换也在 `MainWindow` 中直接完成。删除了 `include/recordlab_host/ui/imu_runtime_bridge.h`、`src/ui/imu_runtime_bridge.cpp` 和 `tests/test_imu_runtime_bridge.cpp`。
+- 添加启动/关闭进程清理：启动时 `recordlab_host_app` 通过 `ProcessHandle::killByCmdlinePattern("recordlab_nodes.core.node_runtime")` 扫描 `/proc` 目录清理残留的 node_runtime 进程（先 SIGTERM，3 秒后 SIGKILL）。关闭时 `MainWindow::~MainWindow()` 按序销毁 ScriptsActuator → DataReceiver → AgentManager，后者通过 `ProcessHandle::terminate()` 先 SIGTERM 进程组后 SIGKILL 确保子进程完全终止。
 
 
-- 当前 `echo_message_system` C++ 高层 API 与 Python 高层 API 原本不完全跨语言兼容。已按新的执行方向修改中间件 C++ 版本，而不是在 Host 仓库保留私有协议实现。
+- **-------重要------：**当前 `echo_message_system` C++ 高层 API 与 Python 高层 API 原本不完全跨语言兼容。已按新的执行方向修改中间件 C++ 版本，而不是在 Host 仓库保留私有协议实现。
 - 快速命令 result 可能遇到 ZMQ PUB/SUB slow-joiner 风险。高概率场景是 client 刚启动 result/feedback 订阅后立刻发送毫秒级返回的 `check/init_device` 等命令；正常运行中订阅已稳定，或命令本身耗时较长时概率较低。中间件层可以通过订阅 ready handshake、result 改为 REQ/REP、ack 后发布、短期 result buffer 等方式彻底解决。当前第一版只记录该风险，测试中在 client `start_listening()` 后增加启动稳定等待，不在 node runtime 里加入业务延迟。
 - BSP 使用的 XREAL SDK 是 Python Qt/QObject 实现。修正方案不是改 Host，也不是让 BSP 拥有独立 main 入口，而是在 Python Nodes 通用 `node_runtime` 增加节点声明式 Qt 事件循环能力：具体 node class 可声明 `requires_qt_event_loop = True`，runtime 在实例化 node 前创建 `QCoreApplication` 并用 Qt event loop 承载 SDK 信号。Host 仍只启动 `python -m recordlab_nodes.core.node_runtime --config ... --agent ...`，不知道 Qt/XREAL/BSP。
-- Host 早期 `EchoTopicSubscriber` 只按 JSON parse topic payload，不适合 BSP camera 等二进制/图像 topic。修正方案不是把 BSP 图像流降级成只有元数据的“假 JSON”，而是在中间件/Host 适配层支持 topic `encoding`：Python `echo_message_system` 增加 `json_binary` 编码，允许结构化 JSON 中携带 bytes；Host `EchoTopicSubscriber` 和 `DataReceiver` 按 `agents_config.json` 的 topic encoding 订阅和解析。
+- **-------重要------：**当Host 早期 `EchoTopicSubscriber` 只按 JSON parse topic payload，不适合 BSP camera 等二进制/图像 topic。修正方案不是把 BSP 图像流降级成只有元数据的“假 JSON”，而是在中间件/Host 适配层支持 topic `encoding`：Python `echo_message_system` 增加 `json_binary` 编码，允许结构化 JSON 中携带 bytes；Host `EchoTopicSubscriber` 和 `DataReceiver` 按 `agents_config.json` 的 topic encoding 订阅和解析。
 - Host `AgentManager` 早期只适配单一 node 进程，切换 primary agent 时如果已有进程会复用旧进程，导致 `imu_simulation` 和 `glasses_bsp_node` 不能按配置切换。已修正为按 agent name 管理当前 node 进程，切换 agent 时停止旧进程、重置 ActionClient、启动目标 node runtime。
 
 下一批测试目标：

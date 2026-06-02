@@ -42,7 +42,7 @@ private:
 
     void startNodeProcess(const AgentConfig& config);
     bool ensureClient(const AgentConfig& config);
-    void publishToUI(const std::string& type, nlohmann::json payload);
+    void publishResult(const std::string& type, nlohmann::json payload);
 
     HostMessageBus& bus_;
     std::string agents_config_path_;
@@ -56,6 +56,7 @@ private:
 
     std::thread worker_;
     std::atomic<bool> running_{false};
+    std::string last_source_;
 };
 
 }  // namespace recordlab::host

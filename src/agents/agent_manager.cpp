@@ -70,6 +70,11 @@ void AgentManager::workerLoop() {
 }
 
 void AgentManager::handleMessage(const HostMessage& msg) {
+    // Track the source of the current message for CMD_RESULT routing.
+    if (!msg.source.empty()) {
+        last_source_ = msg.source;
+    }
+
     if (msg.type == msg::SHUTDOWN_AGENT) {
         return;  // workerLoop will exit via running_ flag
     }
@@ -80,6 +85,8 @@ void AgentManager::handleMessage(const HostMessage& msg) {
         const auto cmd = msg.payload.value("cmd", std::string{});
         const auto params = msg.payload.value("params", nlohmann::json::object());
         doCmdRequest(cmd, params);
+    } else if (msg.type == msg::INIT_DEVICE) {
+        doCmdRequest("init_device", {});
     }
 }
 
@@ -87,7 +94,7 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
     try {
         active_agent_ = agent_name;
         const auto config = AgentConfigLoader(agents_config_path_).loadAgent(agent_name);
-        publishToUI(msg::LOG_ENTRY, {{"message", "启动 Agent: " + agent_name}});
+        publishResult(msg::LOG_ENTRY, {{"message", "启动 Agent: " + agent_name}});
         common::Logger::instance().log(
             common::LogLevel::Info,
             "AgentManager",
@@ -99,32 +106,28 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
                 ", topics=[" + describeTopics(config.topics) + "]");
         startNodeProcess(config);
         if (ensureClient(config)) {
-            publishToUI(msg::WATCHDOG_STATE, {{"state", "HEALTHY"}});
-            publishToUI(msg::LOG_ENTRY, {{"message", "Watchdog: " + agent_name + " check 成功"}});
-            if (!config.init_device_params.empty()) {
-                const auto result = action_client_->sendCommand("init_device", config.init_device_params, 5000);
-                publishToUI(msg::CMD_RESULT, {
-                    {"cmd", "init_device"}, {"success", result.success},
-                    {"message", result.result.value("message", result.result.dump())},
-                });
-                publishToUI(msg::LOG_ENTRY, {
-                    {"message", "init_device: " + result.result.value("message", result.result.dump())},
-                });
-            }
-            publishToUI(msg::AGENT_ACTIVATED, {
-                {"agent_name", agent_name}, {"success", true}, {"message", "Agent activated"},
+            publishResult(msg::LOG_ENTRY, {{"message", "Agent " + agent_name + " 连接成功，等待 Watchdog 初始化"}});
+            publishResult(msg::AGENT_ACTIVATED, {
+                {"agent_name", agent_name}, {"success", true},
+                {"message", "Agent activated"},
+                {"subnode_host", config.subnode_host},
+                {"topics", [&]() {
+                    nlohmann::json arr = nlohmann::json::array();
+                    for (const auto& t : config.topics)
+                        arr.push_back({{"name", t.name}, {"port", t.port}, {"encoding", t.encoding}});
+                    return arr;
+                }()},
+                {"init_device_params", config.init_device_params},
             });
         } else {
-            publishToUI(msg::WATCHDOG_STATE, {{"state", "DISCONNECTED"}});
-            publishToUI(msg::LOG_ENTRY, {{"message", "Watchdog: " + agent_name + " 连接失败"}});
-            publishToUI(msg::AGENT_ACTIVATED, {
+            publishResult(msg::LOG_ENTRY, {{"message", "Agent " + agent_name + " 连接失败"}});
+            publishResult(msg::AGENT_ACTIVATED, {
                 {"agent_name", agent_name}, {"success", false}, {"message", "Connection failed"},
             });
         }
     } catch (const std::exception& e) {
-        publishToUI(msg::WATCHDOG_STATE, {{"state", "DISCONNECTED"}});
-        publishToUI(msg::LOG_ENTRY, {{"message", std::string("Agent 启动失败: ") + e.what()}});
-        publishToUI(msg::AGENT_ACTIVATED, {
+        publishResult(msg::LOG_ENTRY, {{"message", std::string("Agent 启动失败: ") + e.what()}});
+        publishResult(msg::AGENT_ACTIVATED, {
             {"agent_name", agent_name}, {"success", false}, {"message", e.what()},
         });
     }
@@ -132,18 +135,18 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
 
 void AgentManager::doCmdRequest(const std::string& cmd, const nlohmann::json& params) {
     if (!action_client_) {
-        publishToUI(msg::CMD_RESULT, {{"cmd", cmd}, {"success", false}, {"message", "当前没有可用 Agent client"}});
+        publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", false}, {"message", "当前没有可用 Agent client"}});
         return;
     }
     try {
-        publishToUI(msg::LOG_ENTRY, {{"message", "发送命令: " + cmd + " " + params.dump()}});
+        publishResult(msg::LOG_ENTRY, {{"message", "发送命令: " + cmd + " " + params.dump()}});
         const auto result = action_client_->sendCommand(cmd, params, 5000);
         const auto message = result.result.value("message", result.result.dump());
-        publishToUI(msg::CMD_RESULT, {{"cmd", cmd}, {"success", result.success}, {"message", message}});
-        publishToUI(msg::LOG_ENTRY, {{"message", cmd + ": " + message}});
+        publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", result.success}, {"message", message}});
+        publishResult(msg::LOG_ENTRY, {{"message", cmd + ": " + message}});
     } catch (const std::exception& e) {
-        publishToUI(msg::CMD_RESULT, {{"cmd", cmd}, {"success", false}, {"message", e.what()}});
-        publishToUI(msg::LOG_ENTRY, {{"message", cmd + " 失败: " + std::string(e.what())}});
+        publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", false}, {"message", e.what()}});
+        publishResult(msg::LOG_ENTRY, {{"message", cmd + " 失败: " + std::string(e.what())}});
     }
 }
 
@@ -181,7 +184,7 @@ void AgentManager::startNodeProcess(const AgentConfig& config) {
          "--config", agents_config_path_, "--agent", config.name},
         nodes_root_, pythonpath);
     node_process_agent_ = config.name;
-    publishToUI(msg::LOG_ENTRY, {{"message", "node_runtime pid=" + std::to_string(node_process_->pid())}});
+    publishResult(msg::LOG_ENTRY, {{"message", "node_runtime pid=" + std::to_string(node_process_->pid())}});
 }
 
 bool AgentManager::ensureClient(const AgentConfig& config) {
@@ -199,8 +202,12 @@ bool AgentManager::ensureClient(const AgentConfig& config) {
     return false;
 }
 
-void AgentManager::publishToUI(const std::string& type, nlohmann::json payload) {
-    bus_.publish({.source = msg::AGENT_MANAGER, .target = msg::UI, .type = type, .payload = std::move(payload)});
+void AgentManager::publishResult(const std::string& type, nlohmann::json payload) {
+    // Route to both the original caller and UI for visibility.
+    bus_.publish({.source = msg::AGENT_MANAGER, .target = last_source_, .type = type, .payload = payload});
+    if (last_source_ != msg::UI) {
+        bus_.publish({.source = msg::AGENT_MANAGER, .target = msg::UI, .type = type, .payload = payload});
+    }
 }
 
 }  // namespace recordlab::host

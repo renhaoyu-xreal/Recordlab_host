@@ -181,11 +181,19 @@ void MainWindow::appendLog(const QString& message) {
 // ── Slots ──────────────────────────────────────────────────────
 
 void MainWindow::activateAgent(const QString& agent_name) {
+    // Stop old Watchdog if any.
+    if (watchdog_) {
+        watchdog_->stop();
+        watchdog_.reset();
+    }
     active_agent_ = agent_name;
     bus_.publish({
         .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::ACTIVATE_AGENT,
         .payload = {{"agent_name", agent_name.toStdString()}},
     });
+    // Start Watchdog in its own thread (PLAN.md T1).
+    watchdog_ = std::make_unique<Watchdog>(bus_, agent_name.toStdString());
+    watchdog_->start();
 }
 
 void MainWindow::sendCommand(const QString& cmd, const QString& params_json) {
@@ -220,6 +228,10 @@ void MainWindow::stopScript() {
 }
 
 void MainWindow::shutdown() {
+    if (watchdog_) {
+        watchdog_->stop();
+        watchdog_.reset();
+    }
     scripts_actuator_.reset();
     data_receiver_.reset();
     if (agent_manager_) agent_manager_->stop();

@@ -7,11 +7,16 @@ namespace recordlab::host::msg {
 constexpr const char* UI              = "ui";
 constexpr const char* AGENT_MANAGER   = "agent_manager";
 constexpr const char* SCRIPTS_ACTUATOR = "scripts_actuator";
+constexpr const char* WATCHDOG        = "watchdog";
 
 // ── UI → AgentManager ──────────────────────────────────────────
 constexpr const char* ACTIVATE_AGENT  = "activate_agent";   // payload: {agent_name}
 constexpr const char* CMD_REQUEST     = "cmd_request";       // payload: {request_id, cmd, params}
 constexpr const char* SHUTDOWN_AGENT  = "shutdown_agent";    // payload: {}
+
+// ── Watchdog → AgentManager ────────────────────────────────────
+constexpr const char* INIT_DEVICE     = "init_device_req";   // payload: {agent_name}
+constexpr const char* ESTOP           = "estop";              // payload: {agent_name}
 
 // ── AgentManager → UI ──────────────────────────────────────────
 constexpr const char* AGENT_ACTIVATED = "agent_activated";   // payload: {agent_name, success, message}

@@ -27,6 +27,8 @@ endif()
 add_library(recordlab_host
   include/recordlab_host/common/logger.h
   include/recordlab_host/scripts/scripts_actuator.h
+  include/recordlab_host/lifecycle/agent_health_state.h
+  include/recordlab_host/lifecycle/watchdog.h
   include/recordlab_host/ui/data_page.h
   include/recordlab_host/ui/entry_page.h
   include/recordlab_host/ui/main_window.h
@@ -48,6 +50,7 @@ add_library(recordlab_host
   src/common/logger.cpp
   src/common/process_handle.cpp
   src/data/sensor_queue.cpp
+  src/lifecycle/watchdog.cpp
   src/data/data_receiver.cpp
   src/scripts/scripts_actuator.cpp
   src/ui/data_page.cpp
