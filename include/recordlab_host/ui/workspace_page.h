@@ -2,6 +2,8 @@
 
 #include <QWidget>
 
+#include <nlohmann/json.hpp>
+
 #include <string>
 
 class QLabel;
@@ -25,6 +27,7 @@ public:
     ScriptPage* scriptPage() const;
     DataPage* dataPage() const;
     void bindMainWindow(MainWindow* mainWindow);
+    void handleTopicData(const QString& name, const nlohmann::json& value, double frequency);
 
 signals:
     void backRequested();

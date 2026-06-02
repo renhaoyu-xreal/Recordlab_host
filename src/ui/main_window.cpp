@@ -136,7 +136,9 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         const bool first = m.payload.value("first_message", false);
         const QString name = QString::fromStdString(topic);
         if (first) appendLog(QStringLiteral("收到 topic: %1").arg(name));
-        emit topicDataReceived(name, QString::fromStdString(value.dump()), freq);
+        if (workspace_page_) {
+            workspace_page_->handleTopicData(name, value, freq);
+        }
         if (name == QStringLiteral("record_timer") && value.is_object())
             emit recordTimerChanged(value.value("duration_ns", 0.0) / 1e9);
         else if (name == QStringLiteral("time_delay") && value.is_object())

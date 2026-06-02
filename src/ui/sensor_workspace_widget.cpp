@@ -306,7 +306,8 @@ QWidget* SensorWorkspaceWidget::buildVideoPlaceholder(const QString& title, QLab
     image_label = new QLabel(title, frame);
     image_label->setAlignment(Qt::AlignCenter);
     image_label->setMinimumSize(220, 120);
-    image_label->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 600;"));
+    image_label->setStyleSheet(QStringLiteral(
+        "QLabel { background-color: #111418; color: #e6ecf2; font-size: 18px; font-weight: 600; }"));
     layout->addWidget(image_label, 1);
     status_label = new QLabel(QStringLiteral("等待图像流"), frame);
     status_label->setAlignment(Qt::AlignCenter);
@@ -421,7 +422,7 @@ void SensorWorkspaceWidget::updateVideoFrame(int camera_index, const nlohmann::j
     const int height = image_payload.value("height", 0);
     const int bytes_per_line = image_payload.value("bytes_per_line", 0);
     if (width <= 0 || height <= 0 || !image_payload.contains("data")) {
-        status_label->setText(QStringLiteral("图像数据无效"));
+        setVideoStatus(camera_index, QStringLiteral("图像数据无效"), true);
         return;
     }
 
@@ -430,12 +431,12 @@ void SensorWorkspaceWidget::updateVideoFrame(int camera_index, const nlohmann::j
     QImage frame;
     if (!encoding.empty()) {
         if (!frame.loadFromData(bytes, encoding == "jpeg" ? "JPG" : encoding.c_str())) {
-            status_label->setText(QStringLiteral("图像解码失败"));
+            setVideoStatus(camera_index, QStringLiteral("图像解码失败"), true);
             return;
         }
     } else {
         if (bytes_per_line <= 0 || bytes.size() < bytes_per_line * height) {
-            status_label->setText(QStringLiteral("图像数据不完整"));
+            setVideoStatus(camera_index, QStringLiteral("图像数据不完整"), true);
             return;
         }
 
@@ -447,7 +448,7 @@ void SensorWorkspaceWidget::updateVideoFrame(int camera_index, const nlohmann::j
             image_format = QImage::Format_RGB888;
         }
         if (image_format == QImage::Format_Invalid) {
-            status_label->setText(QStringLiteral("图像格式不支持"));
+            setVideoStatus(camera_index, QStringLiteral("图像格式不支持"), true);
             return;
         }
 
@@ -460,14 +461,13 @@ void SensorWorkspaceWidget::updateVideoFrame(int camera_index, const nlohmann::j
         frame = image.copy();
     }
     if (frame.isNull()) {
-        status_label->setText(QStringLiteral("图像解码失败"));
+        setVideoStatus(camera_index, QStringLiteral("图像解码失败"), true);
         return;
     }
 
     image_label->setPixmap(QPixmap::fromImage(frame).scaled(
-        image_label->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    image_label->setStyleSheet(QStringLiteral("background-color: #111418;"));
-    status_label->setText(QStringLiteral("cam %1 | %2 x %3").arg(camera_index).arg(width).arg(height));
+        image_label->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
+    setVideoStatus(camera_index, QStringLiteral("cam %1 | %2 x %3").arg(camera_index).arg(width).arg(height));
 
     static std::array<std::chrono::steady_clock::time_point, 2> last_debug_log{};
     const auto now = std::chrono::steady_clock::now();
@@ -506,7 +506,7 @@ void SensorWorkspaceWidget::updateVideoFrameFromSharedMemory(int camera_index, c
 
     recordlab::host::CameraSharedFrame frame;
     if (!camera_shm_reader_->readLatestFrame(shm_name, camera_index, last_seq, frame)) {
-        status_label->setText(QStringLiteral("共享内存帧不可用"));
+        setVideoStatus(camera_index, QStringLiteral("共享内存帧不可用"), true);
         return;
     }
 
@@ -517,12 +517,12 @@ void SensorWorkspaceWidget::updateVideoFrameFromSharedMemory(int camera_index, c
         image_format = QImage::Format_RGB888;
     }
     if (image_format == QImage::Format_Invalid) {
-        status_label->setText(QStringLiteral("共享内存图像格式不支持"));
+        setVideoStatus(camera_index, QStringLiteral("共享内存图像格式不支持"), true);
         return;
     }
     if (frame.width <= 0 || frame.height <= 0 || frame.bytes_per_line <= 0
         || frame.data.size() < frame.bytes_per_line * frame.height) {
-        status_label->setText(QStringLiteral("共享内存图像数据不完整"));
+        setVideoStatus(camera_index, QStringLiteral("共享内存图像数据不完整"), true);
         return;
     }
 
@@ -532,16 +532,14 @@ void SensorWorkspaceWidget::updateVideoFrameFromSharedMemory(int camera_index, c
         frame.height,
         frame.bytes_per_line,
         image_format);
-    const QImage copied = image.copy();
-    if (copied.isNull()) {
-        status_label->setText(QStringLiteral("共享内存图像解码失败"));
+    if (image.isNull()) {
+        setVideoStatus(camera_index, QStringLiteral("共享内存图像解码失败"), true);
         return;
     }
 
-    image_label->setPixmap(QPixmap::fromImage(copied).scaled(
-        image_label->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    image_label->setStyleSheet(QStringLiteral("background-color: #111418;"));
-    status_label->setText(QStringLiteral("cam %1 | %2 x %3 | shm %4")
+    image_label->setPixmap(QPixmap::fromImage(image).scaled(
+        image_label->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
+    setVideoStatus(camera_index, QStringLiteral("cam %1 | %2 x %3 | shm %4")
         .arg(camera_index)
         .arg(frame.width)
         .arg(frame.height)
@@ -563,6 +561,30 @@ void SensorWorkspaceWidget::updateVideoFrameFromSharedMemory(int camera_index, c
                 + " render_ms=" + std::to_string(render_ms));
         last_debug_log[static_cast<std::size_t>(camera_index)] = now;
     }
+}
+
+void SensorWorkspaceWidget::setVideoStatus(int camera_index, const QString& text, bool force) {
+    if (camera_index < 0 || camera_index >= static_cast<int>(video_status_labels_.size())) {
+        return;
+    }
+    auto* status_label = video_status_labels_[static_cast<std::size_t>(camera_index)];
+    if (!status_label) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    auto& last_update = last_video_status_update_[static_cast<std::size_t>(camera_index)];
+    auto& last_text = last_video_status_text_[static_cast<std::size_t>(camera_index)];
+    const double elapsed = std::chrono::duration<double>(now - last_update).count();
+    if (!force && last_update.time_since_epoch().count() != 0 && elapsed < 1.0) {
+        return;
+    }
+    if (!force && last_text == text) {
+        return;
+    }
+    status_label->setText(text);
+    last_text = text;
+    last_update = now;
 }
 
 QWidget* SensorWorkspaceWidget::buildCurvePlaceholder(const QString& title) {

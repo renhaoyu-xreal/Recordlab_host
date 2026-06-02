@@ -42,7 +42,6 @@ signals:
     void logMessage(const QString& message);
     void watchdogStateChanged(const QString& state);
     void commandFinished(const QString& cmd, bool success, const QString& message);
-    void topicDataReceived(const QString& data_name, const QString& value_json, double frequency);
     void recordTimerChanged(double seconds);
     void timeDelayChanged(double milliseconds);
     void scriptFinished(int exit_code);

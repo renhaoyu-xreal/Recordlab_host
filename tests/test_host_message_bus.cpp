@@ -63,6 +63,25 @@ int main() {
         auto message = bus.waitFor("empty", 10);
         assert(!message.has_value());
     }
+
+    {
+        recordlab::host::HostMessageBus bus;
+        bus.registerConsumer("ui");
+        for (int i = 0; i < 20; ++i) {
+            bus.publish(recordlab::host::HostMessage{
+                "",
+                "data_receiver",
+                "ui",
+                "topic_data",
+                {{"topic_name", "camera_data"}, {"seq", i}},
+                "topic_data:camera_data",
+            });
+        }
+        assert(bus.queueSize("ui") == 1);
+        auto messages = bus.drainFor("ui");
+        assert(messages.size() == 1);
+        assert(messages.front().payload["seq"] == 19);
+    }
     std::cout << "host message bus ok\n";
     return 0;
 }

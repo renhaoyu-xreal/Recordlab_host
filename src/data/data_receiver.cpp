@@ -245,6 +245,7 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
                 {"stream_frequencies_hz", stream_frequencies},
                 {"first_message", is_first},
             },
+            .coalesce_key = "topic_data:" + topic_name,
         });
     }
 }

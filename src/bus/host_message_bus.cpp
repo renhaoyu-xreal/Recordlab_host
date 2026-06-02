@@ -10,7 +10,17 @@ void HostMessageBus::registerConsumer(const std::string& target) {
 void HostMessageBus::publish(HostMessage message) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        queues_[message.target].push_back(std::move(message));
+        auto& queue = queues_[message.target];
+        if (!message.coalesce_key.empty()) {
+            for (auto it = queue.begin(); it != queue.end();) {
+                if (it->coalesce_key == message.coalesce_key) {
+                    it = queue.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        queue.push_back(std::move(message));
     }
     cv_.notify_all();
 }

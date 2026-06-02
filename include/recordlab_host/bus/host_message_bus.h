@@ -18,6 +18,9 @@ struct HostMessage {
     std::string target;
     std::string type;
     nlohmann::json payload = nlohmann::json::object();
+    /// Optional latest-only key. Messages with the same target and key are
+    /// coalesced so slow consumers observe only the newest sample.
+    std::string coalesce_key;
 };
 
 class HostMessageBus {
