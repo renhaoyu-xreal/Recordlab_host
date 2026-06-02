@@ -534,7 +534,7 @@ Host 单元测试：
 - Host `AgentManager` 早期只适配单一 node 进程，切换 primary agent 时如果已有进程会复用旧进程，导致 `imu_simulation` 和 `glasses_bsp_node` 不能按配置切换。已修正为按 agent name 管理当前 node 进程，切换 agent 时停止旧进程、重置 ActionClient、启动目标 node runtime。
 - **实现 T1 Watchdog 独立线程**：创建 `include/recordlab_host/lifecycle/` 目录，实现 `Watchdog` 类作为独立 T1 线程。状态机：DISCONNECTED（周期性 check）→ INITIALIZING（不 check，等待 init_device）→ HEALTHY（周期性 check，5s 间隔）。DISCONNECTED 下间隔 2s，3 次连续失败退回到 DISCONNECTED。`estop` 触发立即回退 DISCONNECTED。AgentManager 的消息路由改为 `publishResult`，根据请求来源回发 `CMD_RESULT`（同时发 UI 一份）。
 - **修复 EchoActionClient 超时崩溃**：`sendCommand` 中 `sendGoal` 抛异常和 `cv.wait_for` 超时不再抛 `std::runtime_error`（导致 Host 崩溃），改为返回 `ActionResult`（success=false）。BSP 未连接眼镜时 SSH 连接超时不导致进程终止。
-- **BSP 设备检查器重构**：`XrGlassesSSHManager` 从 `bsp_device.py` 内联移除，迁入 `recordlab_nodes/common/device_checker.py`。同文件新增 `LsusbChecker`，通过 `lsusb` 检测 XREAL USB 设备（VID 0x3318/0x0483），为后续多策略检测（SSH/SDK/lsusb）提供统一入口。
+- **BSP 设备检查器重构**：`XrGlassesSSHManager` 从 `bsp_device.py` 内联移除，迁入 `recordlab_nodes/common/device_checker.py`。同文件新增 `LsusbChecker`，内置完整的 `usb_product_catalog`（11 款设备：Air/P55/Flora、Ada、Charlie、CORE、Gina、GF、Hylla、Core Pro、GS、Glory、Helen/Helen Pro），`lsusb` 输出与 catalog 匹配后返回设备名称、agent_name 和 default_connection。`BspDevice.check()` 默认使用 lsusb 检测，失败后 fallback 到 SSH。`ssh_preferred` 字段重命名为 `default_connection`。
 
 下一批测试目标：
 
