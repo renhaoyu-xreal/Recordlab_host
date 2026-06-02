@@ -35,35 +35,44 @@ ActionResult EchoActionClient::sendCommand(const std::string& cmd, const nlohman
         "EchoActionClient",
         "send command cmd=" + cmd + ", timeout_ms=" + std::to_string(timeout_ms) +
             ", params=" + params.dump());
+
     std::mutex mutex;
     std::condition_variable cv;
     bool done = false;
     ActionResult result;
 
-    uint32_t goal_id = client_->sendGoal(
-        {{"cmd", cmd}, {"params", params}},
-        nullptr,
-        [&](uint32_t id, const nlohmann::json& payload, bool success) {
-            std::lock_guard<std::mutex> lock(mutex);
-            result.goal_id = std::to_string(id);
-            result.result = payload;
-            result.success = success;
-            result.status = success ? "SUCCEEDED" : "FAILED";
-            done = true;
-            cv.notify_one();
-        });
-    common::Logger::instance().log(
-        common::LogLevel::Info,
-        "EchoActionClient",
-        "sent command cmd=" + cmd + ", goal_id=" + std::to_string(goal_id));
+    try {
+        uint32_t goal_id = client_->sendGoal(
+            {{"cmd", cmd}, {"params", params}},
+            nullptr,
+            [&](uint32_t id, const nlohmann::json& payload, bool success) {
+                std::lock_guard<std::mutex> lock(mutex);
+                result.goal_id = std::to_string(id);
+                result.result = payload;
+                result.success = success;
+                result.status = success ? "SUCCEEDED" : "FAILED";
+                done = true;
+                cv.notify_one();
+            });
+        common::Logger::instance().log(
+            common::LogLevel::Info,
+            "EchoActionClient",
+            "sent command cmd=" + cmd + ", goal_id=" + std::to_string(goal_id));
+    } catch (const std::exception& e) {
+        common::Logger::instance().log(
+            common::LogLevel::Error,
+            "EchoActionClient",
+            "sendGoal threw exception cmd=" + cmd + ": " + std::string(e.what()));
+        return {"", nlohmann::json::object(), std::string("sendGoal failed: ") + e.what(), false};
+    }
 
     std::unique_lock<std::mutex> lock(mutex);
     if (!cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&]() { return done; })) {
         common::Logger::instance().log(
             common::LogLevel::Error,
             "EchoActionClient",
-            "timeout waiting result cmd=" + cmd + ", goal_id=" + std::to_string(goal_id));
-        throw std::runtime_error("Timed out waiting for action result: " + std::to_string(goal_id));
+            "timeout waiting result cmd=" + cmd);
+        return {"", nlohmann::json{{"message", "Timed out waiting for action result"}}, "TIMEOUT", false};
     }
     common::Logger::instance().log(
         result.success ? common::LogLevel::Info : common::LogLevel::Warn,
