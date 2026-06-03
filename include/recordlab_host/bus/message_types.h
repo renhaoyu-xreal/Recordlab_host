@@ -32,6 +32,7 @@ constexpr const char* RUN_SCRIPT      = "run_script";        // payload: {script
 constexpr const char* STOP_SCRIPT     = "stop_script";       // payload: {}
 
 // ── ScriptsActuator → UI ──────────────────────────────────────
+constexpr const char* SCRIPT_STARTED  = "script_started";    // payload: {script_path, agent_name, pid}
 constexpr const char* SCRIPT_OUTPUT   = "script_output";     // payload: {text}
 constexpr const char* SCRIPT_FINISHED = "script_finished";   // payload: {exit_code}
 

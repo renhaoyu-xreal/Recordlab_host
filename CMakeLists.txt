@@ -89,6 +89,7 @@ foreach(test_name
   test_echo_topic_encoding
   test_host_message_bus
   test_process_handle
+  test_scripts_actuator_lifecycle
   test_echo_python_integration
   test_ui_layout_contract
   test_watchdog_state_machine

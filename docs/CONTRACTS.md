@@ -1,6 +1,6 @@
 # RecordLab Host 约定
 
-本文档是当前主机端边界的权威表。每个修改此处某一行的 PR
+本文档是当前主机端边界的表。每个修改此处某一行的 PR
 都应说明它修改了哪一项边界。
 
 ## PR 边界：引入 AgentProxy
@@ -27,6 +27,15 @@
   调用 `AgentProxy.cmd("init_device", params)`。
 - `AgentProxy`、`DataReceiver`、`ScriptsActuator`、`SensorQueue` 不因本 PR 改变边界。
 
+## PR 边界：ScriptsActuator 生命周期事件
+
+此 PR 只完善 `ScriptsActuator` 的脚本生命周期事件，不改变
+`AgentManager`、`Watchdog`、`DataReceiver` 边界。
+
+- `SCRIPT_STARTED` 只表示脚本进程已经由 `QProcess::started` 确认启动。
+- `LOG_ENTRY` 继续用于人可读日志展示，不作为状态机判断依据。
+- `SCRIPT_FINISHED` 继续表示脚本进程退出。
+
   
 
 ## 消息类型
@@ -44,6 +53,7 @@
 | `log_entry`       | 主机模块                        | UI                      | `{message}`                                                  |
 | `run_script`      | UI                              | ScriptsActuator         | `{script_path, agent_name}`                                  |
 | `stop_script`     | UI                              | ScriptsActuator         | `{}`                                                         |
+| `script_started`  | ScriptsActuator                 | UI                      | `{script_path, agent_name, pid}`                             |
 | `script_output`   | ScriptsActuator                 | UI                      | `{text}`                                                     |
 | `script_finished` | ScriptsActuator                 | UI                      | `{exit_code}`                                                |
 | `topic_data`      | DataReceiver                    | UI                      | `{topic_name, value, frequency_hz, first_message}`           |

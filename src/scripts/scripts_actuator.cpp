@@ -80,6 +80,13 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
             publishToUI(msg::LOG_ENTRY, {{"message", text.toStdString()}});
         }
     });
+    connect(script_process_.get(), &QProcess::started, this, [this, resolved, agent_name]() {
+        publishToUI(msg::SCRIPT_STARTED, {
+            {"script_path", resolved.toStdString()},
+            {"agent_name", agent_name},
+            {"pid", static_cast<qint64>(script_process_->processId())},
+        });
+    });
     connect(script_process_.get(), qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
             this, [this](int exit_code, QProcess::ExitStatus) {
         publishToUI(msg::SCRIPT_FINISHED, {{"exit_code", exit_code}});
