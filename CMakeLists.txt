@@ -26,6 +26,7 @@ endif()
 
 add_library(recordlab_host
   include/recordlab_host/common/logger.h
+  include/recordlab_host/agents/agent_proxy.h
   include/recordlab_host/scripts/scripts_actuator.h
   include/recordlab_host/lifecycle/agent_health_state.h
   include/recordlab_host/lifecycle/watchdog.h
@@ -44,6 +45,7 @@ add_library(recordlab_host
   ${ECHO_CPP_DIR}/src/subscriber.cpp
   src/agents/agent_config_loader.cpp
   src/agents/agent_manager.cpp
+  src/agents/agent_proxy.cpp
   src/bus/host_message_bus.cpp
   src/communication/echo_action_client.cpp
   src/communication/echo_topic_subscriber.cpp
@@ -83,6 +85,7 @@ enable_testing()
 
 foreach(test_name
   test_agent_config_loader
+  test_agent_manager_proxy_integration
   test_echo_topic_encoding
   test_host_message_bus
   test_process_handle
