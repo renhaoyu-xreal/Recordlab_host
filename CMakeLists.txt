@@ -91,6 +91,7 @@ foreach(test_name
   test_process_handle
   test_echo_python_integration
   test_ui_layout_contract
+  test_watchdog_state_machine
 )
   add_executable(${test_name} tests/${test_name}.cpp)
   target_link_libraries(${test_name} PRIVATE recordlab_host)

@@ -16,15 +16,15 @@ constexpr const char* SHUTDOWN_AGENT  = "shutdown_agent";    // payload: {}
 // ── Agent commands → AgentManager ──────────────────────────────
 // Shared by UI, Watchdog and future script/master CLI callers.
 constexpr const char* CMD_REQUEST     = "cmd_request";       // payload: {request_id, agent_name, cmd, params, priority, silent}
-constexpr const char* CMD_RESULT      = "cmd_result";        // payload: {agent_name, cmd, success, message}
+constexpr const char* CMD_RESULT      = "cmd_result";        // payload: {request_id, agent_name, cmd, success, message}
 
 // ── Watchdog → AgentManager ────────────────────────────────────
-constexpr const char* INIT_DEVICE     = "init_device_req";   // payload: {agent_name}
+constexpr const char* INIT_DEVICE     = "init_device_req";   // payload: {request_id, agent_name}
 constexpr const char* ESTOP           = "estop";              // payload: {agent_name}
 
 // ── AgentManager → UI ──────────────────────────────────────────
 constexpr const char* AGENT_ACTIVATED = "agent_activated";   // payload: {agent_name, success, message}
-constexpr const char* WATCHDOG_STATE  = "watchdog_state";    // payload: {state}
+constexpr const char* WATCHDOG_STATE  = "watchdog_state";    // payload: {agent_name, state, reason, consecutive_failures}
 constexpr const char* LOG_ENTRY       = "log_entry";         // payload: {message}
 
 // ── UI → ScriptsActuator ───────────────────────────────────────

@@ -71,6 +71,9 @@ void AgentManager::handleMessage(const HostMessage& msg) {
     if (!msg.source.empty()) {
         last_source_ = msg.source;
     }
+    last_request_id_ = msg.request_id.empty()
+        ? msg.payload.value("request_id", std::string{})
+        : msg.request_id;
 
     if (msg.type == msg::SHUTDOWN_AGENT) {
         return;  // workerLoop will exit via running_ flag
@@ -86,7 +89,15 @@ void AgentManager::handleMessage(const HostMessage& msg) {
         doCmdRequest(agent_name, cmd, params, silent);
     } else if (msg.type == msg::INIT_DEVICE) {
         const auto agent_name = msg.payload.value("agent_name", active_agent_);
-        doCmdRequest(agent_name, "init_device", {}, false);
+        const std::string target_agent = agent_name.empty() ? active_agent_ : agent_name;
+        nlohmann::json params = nlohmann::json::object();
+        if (AgentProxy* agent = findAgent(target_agent)) {
+            params = agent->config().init_device_params;
+        }
+        doCmdRequest(agent_name, "init_device", params, false);
+    } else if (msg.type == msg::ESTOP) {
+        const auto agent_name = msg.payload.value("agent_name", active_agent_);
+        doCmdRequest(agent_name, "estop", nlohmann::json::object(), false);
     }
 }
 
@@ -223,10 +234,25 @@ AgentProxy& AgentManager::getOrCreateAgent(const AgentConfig& config) {
 }
 
 void AgentManager::publishResult(const std::string& type, nlohmann::json payload) {
+    if (type == msg::CMD_RESULT && !last_request_id_.empty()) {
+        payload["request_id"] = last_request_id_;
+    }
     // Route to both the original caller and UI for visibility.
-    bus_.publish({.source = msg::AGENT_MANAGER, .target = last_source_, .type = type, .payload = payload});
+    bus_.publish({
+        .request_id = last_request_id_,
+        .source = msg::AGENT_MANAGER,
+        .target = last_source_,
+        .type = type,
+        .payload = payload,
+    });
     if (last_source_ != msg::UI) {
-        bus_.publish({.source = msg::AGENT_MANAGER, .target = msg::UI, .type = type, .payload = payload});
+        bus_.publish({
+            .request_id = last_request_id_,
+            .source = msg::AGENT_MANAGER,
+            .target = msg::UI,
+            .type = type,
+            .payload = payload,
+        });
     }
 }
 

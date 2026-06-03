@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -12,7 +13,7 @@ namespace recordlab::host {
 
 /// Watchdog (PLAN.md T1) — runs in its own worker thread.
 /// Monitors agent health via periodic `check` commands and manages
-/// the DISCONNECTED → INITIALIZING → HEALTHY state machine.
+/// the DISCONNECTED → INITIALIZING → HEALTHY / ERROR state machine.
 class Watchdog {
 public:
     /// Maximum consecutive check failures before declaring DISCONNECTED.
@@ -41,6 +42,8 @@ private:
     void workerLoop();
     AgentHealthState doCheck();
     AgentHealthState doInitDevice();
+    std::optional<HostMessage> waitForResult(const std::string& request_id, int timeout_ms);
+    void publishState(AgentHealthState state, const std::string& reason);
 
     HostMessageBus& bus_;
     std::string agent_name_;
@@ -50,6 +53,7 @@ private:
     std::atomic<bool> estop_requested_{false};
     std::atomic<AgentHealthState> state_{AgentHealthState::DISCONNECTED};
     std::atomic<int> consecutive_failures_{0};
+    std::string last_reason_ = "startup";
 };
 
 }  // namespace recordlab::host

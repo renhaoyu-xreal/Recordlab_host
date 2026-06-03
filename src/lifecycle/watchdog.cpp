@@ -3,6 +3,7 @@
 #include "recordlab_host/common/logger.h"
 
 #include <chrono>
+#include <algorithm>
 #include <sstream>
 
 namespace recordlab::host {
@@ -31,6 +32,7 @@ void Watchdog::start() {
     estop_requested_ = false;
     state_ = AgentHealthState::DISCONNECTED;
     consecutive_failures_ = 0;
+    last_reason_ = "startup";
     worker_ = std::thread(&Watchdog::workerLoop, this);
 }
 
@@ -60,10 +62,7 @@ void Watchdog::workerLoop() {
                 "estop triggered for agent=" + agent_name_);
             state_ = AgentHealthState::DISCONNECTED;
             consecutive_failures_ = 0;
-            bus_.publish({
-                .source = msg::WATCHDOG, .target = msg::UI, .type = msg::WATCHDOG_STATE,
-                .payload = {{"state", ::recordlab::host::to_string(AgentHealthState::DISCONNECTED)}},
-            });
+            publishState(AgentHealthState::DISCONNECTED, "estop");
             bus_.publish({
                 .source = msg::WATCHDOG, .target = msg::AGENT_MANAGER, .type = msg::ESTOP,
                 .payload = {{"agent_name", agent_name_}},
@@ -78,16 +77,21 @@ void Watchdog::workerLoop() {
         case AgentHealthState::DISCONNECTED:
             next = doCheck();
             if (next == AgentHealthState::INITIALIZING) {
-                // check succeeded first time; immediately attempt init_device.
+                common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
+                    "state transition: DISCONNECTED → INITIALIZING agent=" + agent_name_);
+                state_ = AgentHealthState::INITIALIZING;
+                publishState(AgentHealthState::INITIALIZING, last_reason_);
+                current = AgentHealthState::INITIALIZING;
                 next = doInitDevice();
             }
             break;
         case AgentHealthState::INITIALIZING:
-            // Do not check while init_device is in progress.
-            // This state is transient and should only be reached if
-            // doInitDevice is taking longer than one cycle.
+            next = doInitDevice();
             break;
         case AgentHealthState::HEALTHY:
+            next = doCheck();
+            break;
+        case AgentHealthState::ERROR:
             next = doCheck();
             break;
         }
@@ -100,11 +104,7 @@ void Watchdog::workerLoop() {
         }
         state_ = next;
 
-        // Notify UI of the new state.
-        bus_.publish({
-            .source = msg::WATCHDOG, .target = msg::UI, .type = msg::WATCHDOG_STATE,
-            .payload = {{"state", ::recordlab::host::to_string(next)}},
-        });
+        publishState(next, last_reason_);
 
         // Wait before next cycle.
         int interval = (next == AgentHealthState::HEALTHY)
@@ -138,35 +138,37 @@ AgentHealthState Watchdog::doCheck() {
         },
     });
 
-    auto opt = bus_.waitFor(msg::WATCHDOG, 3000);
-    if (!opt || opt->type != msg::CMD_RESULT) {
+    auto opt = waitForResult(request_id, 3000);
+    if (!opt) {
         consecutive_failures_++;
+        last_reason_ = "check_timeout";
         common::Logger::instance().log(common::LogLevel::Warn, "Watchdog",
             "check failed for agent=" + agent_name_ +
             " (consecutive=" + std::to_string(consecutive_failures_) + "/"
             + std::to_string(kMaxCheckFailures) + ")");
-        if (consecutive_failures_ >= kMaxCheckFailures) {
-            return AgentHealthState::DISCONNECTED;
-        }
-        return state_.load();
+        return AgentHealthState::DISCONNECTED;
     }
 
     const bool success = opt->payload.value("success", false);
     if (!success) {
         consecutive_failures_++;
+        last_reason_ = "check_failed";
         common::Logger::instance().log(common::LogLevel::Warn, "Watchdog",
             "check returned failure for agent=" + agent_name_ +
             " (consecutive=" + std::to_string(consecutive_failures_) + ")");
-        if (consecutive_failures_ >= kMaxCheckFailures) {
-            return AgentHealthState::DISCONNECTED;
-        }
-        return state_.load();
+        return AgentHealthState::DISCONNECTED;
     }
 
     consecutive_failures_ = 0;
     if (state_.load() == AgentHealthState::DISCONNECTED) {
+        last_reason_ = "check_succeeded";
         return AgentHealthState::INITIALIZING;
     }
+    if (state_.load() == AgentHealthState::ERROR) {
+        last_reason_ = "error_check_still_succeeds";
+        return AgentHealthState::ERROR;
+    }
+    last_reason_ = "check_succeeded";
     return AgentHealthState::HEALTHY;
 }
 
@@ -174,28 +176,64 @@ AgentHealthState Watchdog::doInitDevice() {
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
         "triggering init_device for agent=" + agent_name_);
 
+    const auto request_id = makeWatchdogRequestId(agent_name_, "init_device");
     bus_.publish({
+        .request_id = request_id,
         .source = msg::WATCHDOG, .target = msg::AGENT_MANAGER, .type = msg::INIT_DEVICE,
-        .payload = {{"agent_name", agent_name_}},
+        .payload = {{"request_id", request_id}, {"agent_name", agent_name_}},
     });
 
-    auto opt = bus_.waitFor(msg::WATCHDOG, 10000);
-    if (!opt || opt->type != msg::CMD_RESULT) {
+    auto opt = waitForResult(request_id, 10000);
+    if (!opt) {
+        last_reason_ = "init_device_timeout";
         common::Logger::instance().log(common::LogLevel::Error, "Watchdog",
             "init_device timeout/failure for agent=" + agent_name_);
-        return AgentHealthState::DISCONNECTED;
+        return AgentHealthState::ERROR;
     }
 
     const bool success = opt->payload.value("success", false);
     if (!success) {
+        last_reason_ = "init_device_failed";
         common::Logger::instance().log(common::LogLevel::Error, "Watchdog",
             "init_device failed for agent=" + agent_name_);
-        return AgentHealthState::DISCONNECTED;
+        return AgentHealthState::ERROR;
     }
 
+    consecutive_failures_ = 0;
+    last_reason_ = "init_device_succeeded";
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
         "init_device succeeded for agent=" + agent_name_);
     return AgentHealthState::HEALTHY;
+}
+
+std::optional<HostMessage> Watchdog::waitForResult(const std::string& request_id, int timeout_ms) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    while (running_ && std::chrono::steady_clock::now() < deadline) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count();
+        auto opt = bus_.waitFor(msg::WATCHDOG, static_cast<int>(std::min<long long>(remaining, 100)));
+        if (!opt) continue;
+        const std::string payload_request_id = opt->payload.value("request_id", std::string{});
+        if (opt->type == msg::CMD_RESULT &&
+            (opt->request_id == request_id || payload_request_id == request_id)) {
+            return opt;
+        }
+    }
+    return std::nullopt;
+}
+
+void Watchdog::publishState(AgentHealthState state, const std::string& reason) {
+    bus_.publish({
+        .source = msg::WATCHDOG,
+        .target = msg::UI,
+        .type = msg::WATCHDOG_STATE,
+        .payload = {
+            {"agent_name", agent_name_},
+            {"state", ::recordlab::host::to_string(state)},
+            {"reason", reason},
+            {"consecutive_failures", consecutive_failures_.load()},
+        },
+    });
 }
 
 }  // namespace recordlab::host

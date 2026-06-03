@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <cassert>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -43,6 +44,18 @@ int freePort() {
     return port;
 }
 
+void writeCsv(const fs::path& path) {
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::ofstream out(path);
+    out << "timestamp,onsensor_timestamp_us,timestamp_ns,type,data0,data1,data2,data3,data4,data5\n";
+    for (int i = 0; i < 5; ++i) {
+        out << (i * 0.001) << "," << (i * 1000) << "," << (now + i * 1000000LL)
+            << ",1," << i << "," << i + 1 << "," << i + 2 << "," << i + 3 << ","
+            << i + 4 << "," << i + 5 << "\n";
+    }
+}
+
 std::optional<recordlab::host::HostMessage> waitForType(
     recordlab::host::HostMessageBus& bus,
     const std::string& target,
@@ -61,6 +74,8 @@ int main() {
     const fs::path tmp = fs::temp_directory_path() / ("recordlab_agent_manager_proxy_" + std::to_string(::getpid()));
     fs::create_directories(tmp);
     const fs::path config = tmp / "agents_config.json";
+    const fs::path csv = tmp / "imu.csv";
+    writeCsv(csv);
 
     const int goal_port = freePort();
     const int feedback_port = freePort();
@@ -78,6 +93,9 @@ int main() {
           "goal_port": )" << goal_port << R"(,
           "feedback_port": )" << feedback_port << R"(,
           "root_path": ")" << (tmp / "data").string() << R"(",
+          "init_device_params": {
+            "read_path": ")" << csv.string() << R"("
+          },
           "topics": [
             {"name": "imu_data", "port": )" << imu_port << R"(, "encoding": "json"}
           ],
@@ -95,6 +113,7 @@ int main() {
 
     recordlab::host::HostMessageBus bus;
     bus.registerConsumer(recordlab::host::msg::UI);
+    bus.registerConsumer(recordlab::host::msg::WATCHDOG);
     recordlab::host::AgentManager manager(bus, config.string(), nodes_root, echo_python_root);
     manager.start();
 
@@ -131,6 +150,25 @@ int main() {
         assert(result->payload.value("agent_name", std::string{}) == "imu_proxy");
         assert(result->payload.value("cmd", std::string{}) == "check");
         assert(result->payload.value("success", false));
+
+        bus.publish({
+            .request_id = "test_init_1",
+            .source = recordlab::host::msg::WATCHDOG,
+            .target = recordlab::host::msg::AGENT_MANAGER,
+            .type = recordlab::host::msg::INIT_DEVICE,
+            .payload = {
+                {"request_id", "test_init_1"},
+                {"agent_name", "imu_proxy"},
+            },
+        });
+
+        auto init = waitForType(bus, recordlab::host::msg::WATCHDOG, recordlab::host::msg::CMD_RESULT);
+        assert(init.has_value());
+        assert(init->request_id == "test_init_1");
+        assert(init->payload.value("request_id", std::string{}) == "test_init_1");
+        assert(init->payload.value("agent_name", std::string{}) == "imu_proxy");
+        assert(init->payload.value("cmd", std::string{}) == "init_device");
+        assert(init->payload.value("success", false));
     } catch (...) {
         manager.stop();
         fs::remove_all(tmp);

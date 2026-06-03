@@ -57,6 +57,7 @@ private:
     std::thread worker_;
     std::atomic<bool> running_{false};
     std::string last_source_;
+    std::string last_request_id_;
 };
 
 }  // namespace recordlab::host

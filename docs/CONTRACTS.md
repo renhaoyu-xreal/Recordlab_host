@@ -15,6 +15,18 @@
 
 - `ScriptsActuator` 仍然是实验脚本进程的拥有者。
 
+## PR 边界：Watchdog ERROR 状态
+
+此 PR 仅修改 Watchdog 状态机和 AgentManager 的 `init_device_req`
+转发：
+
+- `Watchdog` 负责 `DISCONNECTED / INITIALIZING / HEALTHY / ERROR` 状态。
+- `ERROR` 表示主机端与设备端状态可能不一致，需要实验人员人工处理。
+- `ERROR` 不触发自动 cleanup、release 或 reset。
+- `AgentManager` 收到 `init_device_req` 后使用 `AgentConfig.init_device_params`
+  调用 `AgentProxy.cmd("init_device", params)`。
+- `AgentProxy`、`DataReceiver`、`ScriptsActuator`、`SensorQueue` 不因本 PR 改变边界。
+
   
 
 ## 消息类型
@@ -24,11 +36,11 @@
 | `activate_agent`  | UI                              | AgentManager            | `{agent_name}`                                               |
 | `shutdown_agent`  | 生命周期                        | AgentManager            | `{}`                                                         |
 | `cmd_request`     | UI、Watchdog、未来的 master CLI | AgentManager            | `{request_id, agent_name, cmd, params, priority, silent}`    |
-| `cmd_result`      | AgentManager                    | 原始调用方、UI 可见副本 | `{agent_name, cmd, success, message}`                        |
-| `init_device_req` | Watchdog                        | AgentManager            | `{agent_name}`                                               |
+| `cmd_result`      | AgentManager                    | 原始调用方、UI 可见副本 | `{request_id, agent_name, cmd, success, message}`            |
+| `init_device_req` | Watchdog                        | AgentManager            | `{request_id, agent_name}`                                   |
 | `estop`           | Watchdog                        | AgentManager            | `{agent_name}`                                               |
 | `agent_activated` | AgentManager                    | UI                      | `{agent_name, success, message, subnode_host, topics, init_device_params}` |
-| `watchdog_state`  | Watchdog                        | UI                      | `{state}`                                                    |
+| `watchdog_state`  | Watchdog                        | UI                      | `{agent_name, state, reason, consecutive_failures}`          |
 | `log_entry`       | 主机模块                        | UI                      | `{message}`                                                  |
 | `run_script`      | UI                              | ScriptsActuator         | `{script_path, agent_name}`                                  |
 | `stop_script`     | UI                              | ScriptsActuator         | `{}`                                                         |
