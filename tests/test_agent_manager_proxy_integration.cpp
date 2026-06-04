@@ -79,7 +79,7 @@ int main() {
 
     const int goal_port = freePort();
     const int feedback_port = freePort();
-    const int imu_port = freePort();
+    const int data_port = freePort();
 
     std::ofstream cfg(config);
     cfg << R"({
@@ -92,12 +92,13 @@ int main() {
           "action_name": "imu_proxy_actions",
           "goal_port": )" << goal_port << R"(,
           "feedback_port": )" << feedback_port << R"(,
+          "data_port": )" << data_port << R"(,
           "root_path": ")" << (tmp / "data").string() << R"(",
           "init_device_params": {
             "read_path": ")" << csv.string() << R"("
           },
           "topics": [
-            {"name": "imu_data", "port": )" << imu_port << R"(, "encoding": "json"}
+            {"name": "imu_data", "encoding": "json"}
           ],
           "custom_params": {}
         }

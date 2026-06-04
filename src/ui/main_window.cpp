@@ -145,7 +145,7 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
             const auto config = agent_manager_->loadAgentConfig(agent_name);
             std::vector<DataReceiver::TopicConfig> topics;
             for (const auto& t : config.topics)
-                topics.push_back({t.name, t.port, t.encoding, uiRateForTopic(t.name)});
+                topics.push_back({t.name, config.data_port, t.encoding, uiRateForTopic(t.name)});
             data_receiver_->subscribe(config.subnode_host, topics);
         }
         return;

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
 namespace {
@@ -29,6 +30,7 @@ int main() {
     assert(agent.name == "imu_simulation");
     assert(agent.node_class.find("ImuSimNode") != std::string::npos);
     assert(agent.goal_port == 5690);
+    assert(agent.data_port == 16510);
     assert(!agent.topics.empty());
     auto bsp = loader.loadAgent("glasses_bsp_node");
     assert(bsp.name == "glasses_bsp_node");
@@ -41,6 +43,32 @@ int main() {
         }
     }
     assert(has_camera);
+
+    const auto tmp = hostRoot() / "build" / "test_agent_config_loader_tmp.json";
+    {
+        std::ofstream out(tmp);
+        out << R"({"agents":{"bad":{"node_class":"x.y.Node","goal_port":1,"feedback_port":2,"topics":[]}}})";
+    }
+    bool missing_data_port_failed = false;
+    try {
+        recordlab::host::AgentConfigLoader(tmp.string()).loadAgent("bad");
+    } catch (const std::exception&) {
+        missing_data_port_failed = true;
+    }
+    assert(missing_data_port_failed);
+
+    {
+        std::ofstream out(tmp);
+        out << R"({"agents":{"bad":{"node_class":"x.y.Node","goal_port":1,"feedback_port":2,"data_port":3,"topics":[{"name":"imu_data","port":4,"encoding":"json"}]}}})";
+    }
+    bool topic_port_failed = false;
+    try {
+        recordlab::host::AgentConfigLoader(tmp.string()).loadAgent("bad");
+    } catch (const std::exception&) {
+        topic_port_failed = true;
+    }
+    assert(topic_port_failed);
+
     std::cout << "agent config loader ok\n";
     return 0;
 }

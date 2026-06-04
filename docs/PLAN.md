@@ -345,6 +345,7 @@ Python node 到 Host 数据通信：
       "action_name": "imu_simulation_actions",
       "goal_port": 5690,
       "feedback_port": 5691,
+      "data_port": 16510,
       "root_path": "data",
       "init_device_params": {
         "read_path": "data/samples/imu_0.csv"
@@ -354,10 +355,10 @@ Python node 到 Host 数据通信：
         "imu_simulation_record_demo.py"
       ],
       "topics": [
-        {"name": "imu_data", "port": 16510, "encoding": "json"},
-        {"name": "record_timer", "port": 16520, "encoding": "json"},
-        {"name": "time_delay", "port": 16521, "encoding": "json"},
-        {"name": "motion_status", "port": 16525, "encoding": "json"}
+        {"name": "imu_data", "encoding": "json"},
+        {"name": "record_timer", "encoding": "json"},
+        {"name": "time_delay", "encoding": "json"},
+        {"name": "motion_status", "encoding": "json"}
       ],
       "custom_params": {}
     }
@@ -448,13 +449,13 @@ Data2: double
 ```
 
 
-第一版 topic/port：
+第一版静态 topic 使用 agent 级 `data_port`，topic 名称放在 ZeroMQ multipart 第一帧：
 
-- `imu_data`: `16510`
-- `camera_data`: `16515`
-- `record_timer`: `16520`
-- `time_delay`: `16521`
-- `motion_status`: `16525`
+- `imu_data`
+- `camera_data`
+- `record_timer`
+- `time_delay`
+- `motion_status`
 
 ## 7. 实施步骤
 

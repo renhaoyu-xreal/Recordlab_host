@@ -51,6 +51,7 @@ int main(int argc, char** argv) {
           "action_name": "imu_simulation_actions",
           "goal_port": 5690,
           "feedback_port": 5691,
+          "data_port": 16510,
           "root_path": "data",
           "topics": []
         }

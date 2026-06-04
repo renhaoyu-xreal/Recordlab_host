@@ -7,13 +7,13 @@
 namespace recordlab::host {
 namespace {
 
-std::string describeTopics(const std::vector<TopicConfig>& topics) {
+std::string describeTopics(const std::vector<TopicConfig>& topics, int data_port) {
     std::ostringstream oss;
     for (std::size_t i = 0; i < topics.size(); ++i) {
         if (i > 0) {
             oss << ", ";
         }
-        oss << topics[i].name << "@" << topics[i].port << "/" << topics[i].encoding;
+        oss << topics[i].name << "@" << data_port << "/" << topics[i].encoding;
     }
     return oss.str();
 }
@@ -113,11 +113,13 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
                 ", action=" + config.action_name +
                 ", goal_port=" + std::to_string(config.goal_port) +
                 ", feedback_port=" + std::to_string(config.feedback_port) +
-                ", topics=[" + describeTopics(config.topics) + "]",
+                ", data_port=" + std::to_string(config.data_port) +
+                ", topics=[" + describeTopics(config.topics, config.data_port) + "]",
             {
                 {"request_id", last_request_id_},
                 {"agent_name", config.name},
                 {"node_name", config.name},
+                {"data_port", config.data_port},
             });
         AgentProxy& agent = getOrCreateAgent(config);
         if (agent.launchOrConnect()) {
@@ -129,7 +131,7 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
                 {"topics", [&]() {
                     nlohmann::json arr = nlohmann::json::array();
                     for (const auto& t : config.topics)
-                        arr.push_back({{"name", t.name}, {"port", t.port}, {"encoding", t.encoding}});
+                        arr.push_back({{"name", t.name}, {"port", config.data_port}, {"encoding", t.encoding}});
                     return arr;
                 }()},
                 {"init_device_params", config.init_device_params},

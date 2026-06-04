@@ -31,6 +31,7 @@ AgentConfig AgentConfigLoader::loadAgent(const std::string& agent_name) const {
     cfg.action_name = item.value("action_name", cfg.name + "_actions");
     cfg.goal_port = item.at("goal_port").get<int>();
     cfg.feedback_port = item.at("feedback_port").get<int>();
+    cfg.data_port = item.at("data_port").get<int>();
     cfg.root_path = item.value("root_path", "data");
     cfg.init_device_params = item.value("init_device_params", nlohmann::json::object());
     cfg.init_device_pause_duration = item.value("init_device_pause_duration", 0.0);
@@ -39,9 +40,14 @@ AgentConfig AgentConfigLoader::loadAgent(const std::string& agent_name) const {
         cfg.default_scripts.push_back(script.get<std::string>());
     }
     for (const auto& topic : item.value("topics", nlohmann::json::array())) {
+        if (topic.contains("port")) {
+            const auto topic_name = topic.value("name", std::string{"<unknown>"});
+            throw std::runtime_error(
+                "topics[].port is no longer supported; use agent data_port instead: " +
+                cfg.name + "/" + topic_name);
+        }
         cfg.topics.push_back(TopicConfig{
             topic.at("name").get<std::string>(),
-            topic.at("port").get<int>(),
             topic.value("encoding", "json"),
         });
     }

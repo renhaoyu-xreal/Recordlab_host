@@ -46,6 +46,18 @@
 - `process_output` 用于本地 node stdout/stderr 的结构化来源。
 - `log_entry` 继续用于人可读日志展示。
 
+## PR 边界：单 data_port 多 Topic
+
+此 PR 只修改 topic 数据传输端口契约，不改变 AgentManager、Watchdog、
+ScriptsActuator 或 DataRegistryServer 边界。
+
+- 每个 agent 配置一个 `data_port`。
+- 同一 agent 的多个静态 topic 共用一个 Python/ZMQ PUB socket。
+- topic 名称仍作为 ZeroMQ multipart 第一帧，payload 作为第二帧。
+- 配置中的 `topics[].port` 不再兼容；出现该字段时加载失败。
+- `agent_activated.topics[].port` 是 Host 补出的运行时有效订阅端口，
+  值等于该 agent 的 `data_port`。
+
 ## 消息类型
 
 | 类型              | 生产者                          | 消费者                  | 载荷                                                         |
@@ -83,10 +95,11 @@
 | `action_name`                | 可选     | 配置元数据              | 默认为 `<agent_name>_actions`；当前 EchoActionClient 使用固定端口。 |
 | `goal_port`                  | 是       | AgentProxy              | Echo action 的 goal 端口。                                   |
 | `feedback_port`              | 是       | AgentProxy              | Echo action 的 feedback/result 端口。                        |
+| `data_port`                  | 是       | Python 节点/DataReceiver | Echo topic 数据端口；同一 agent 的所有静态 topic 共用此端口。 |
 | `root_path`                  | 可选     | Python 节点             | 默认为 `data`。                                              |
 | `init_device_params`         | 可选     | Python 节点命令         | 默认为 `{}`。                                                |
 | `init_device_pause_duration` | 可选     | Python 节点/工作流      | 默认为 `0.0`。                                               |
-| `topics`                     | 可选     | DataReceiver            | 在 DataRegistryServer 存在之前使用的静态 topic 列表。        |
+| `topics`                     | 可选     | DataReceiver            | 静态 topic 列表；元素只包含 `name/encoding`，不包含 `port`。  |
 | `default_scripts`            | 可选     | UI/ScriptsActuator      | 为所选 agent 列出的脚本。                                    |
 | `custom_params`              | 可选     | Python 节点             | agent 专用的业务参数。                                       |
 
@@ -127,4 +140,4 @@ AgentProxy 只负责传输命令。命令的具体实现属于节点。
 | `time_delay`    | Python 节点 | DataReceiver/UI | `json`        |
 | `motion_status` | Python 节点 | DataReceiver/UI | `json`        |
 
-当前主机边界中尚未实现动态 topic 注册。
+以上静态 topic 使用所属 agent 的 `data_port`。当前主机边界中尚未实现动态 topic 注册。
