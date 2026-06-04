@@ -10,6 +10,7 @@
 
 #include <QComboBox>
 #include <QDateTime>
+#include <QDir>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -62,10 +63,11 @@ MainWindow::MainWindow(std::string agents_config_path,
     scripts_actuator_ = std::make_unique<ScriptsActuator>(
         bus_, nodes_root_, echo_python_root_,
         QString::fromStdString(agents_config_path_), this);
+    const QString data_root = QDir(nodes_root_).filePath(QStringLiteral("data"));
 
-    // ── Bus poll timer (~30 Hz) ────────────────────────────────
+    // ── Bus poll timer (~60 Hz) ────────────────────────────────
     bus_poll_timer_ = new QTimer(this);
-    bus_poll_timer_->setInterval(33);
+    bus_poll_timer_->setInterval(16);
     connect(bus_poll_timer_, &QTimer::timeout, this, &MainWindow::pollBusMessages);
     bus_poll_timer_->start();
 
@@ -74,6 +76,8 @@ MainWindow::MainWindow(std::string agents_config_path,
     entry_page_ = new EntryPage(stack_);
     workspace_page_ = new WorkspacePage(stack_);
     workspace_page_->bindMainWindow(this);
+    workspace_page_->scriptPage()->setDataRoot(data_root);
+    workspace_page_->dataPage()->setDataRoot(data_root);
     stack_->addWidget(entry_page_);
     stack_->addWidget(workspace_page_);
     setCentralWidget(stack_);
@@ -86,6 +90,7 @@ MainWindow::MainWindow(std::string agents_config_path,
         }
         workspace_page_->scriptPage()->setScripts(scripts);
         stack_->setCurrentWidget(workspace_page_);
+        showMaximized();
         this->activateAgent(agent_name);
     });
     connect(workspace_page_, &WorkspacePage::backRequested, this, [this]() {
@@ -172,6 +177,20 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         emit scriptFinished(m.payload.value("exit_code", -1));
         return;
     }
+    if (m.type == msg::SCRIPT_WORKFLOW) {
+        const QString action = QString::fromStdString(m.payload.value("action", std::string{}));
+        if (workspace_page_ && action == QStringLiteral("clear")) {
+            workspace_page_->scriptPage()->clearWorkflow();
+        } else if (workspace_page_) {
+            workspace_page_->scriptPage()->updateWorkflow(
+                QString::fromStdString(m.payload.value("title", std::string("脚本流程"))),
+                QString::fromStdString(m.payload.value("message", std::string{})),
+                QString::fromStdString(m.payload.value("steps_json", std::string("[]"))),
+                m.payload.value("finished", false),
+                m.payload.value("success", false));
+        }
+        return;
+    }
 
     // ── Common ──
     if (m.type == msg::LOG_ENTRY) {
@@ -231,7 +250,7 @@ void MainWindow::sendCommand(const QString& cmd, const QString& params_json) {
 void MainWindow::runScript(const QString& script_path) {
     bus_.publish({
         .source = msg::UI, .target = msg::SCRIPTS_ACTUATOR, .type = msg::RUN_SCRIPT,
-        .payload = {{"script_path", script_path.toStdString()}, {"agent_name", active_agent_.toStdString()}},
+        .payload = {{"script_path", script_path.trimmed().toStdString()}, {"agent_name", active_agent_.toStdString()}},
     });
 }
 

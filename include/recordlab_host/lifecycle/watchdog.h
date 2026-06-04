@@ -17,9 +17,9 @@ namespace recordlab::host {
 class Watchdog {
 public:
     /// Maximum consecutive check failures before declaring DISCONNECTED.
-    static constexpr int kMaxCheckFailures = 2;
+    static constexpr int kMaxCheckFailures = 1;
     /// Interval between check attempts when DISCONNECTED (ms).
-    static constexpr int kCheckIntervalDisconnectedMs = 3000;
+    static constexpr int kCheckIntervalDisconnectedMs = 2000;
     /// Interval between checks when HEALTHY (ms).
     static constexpr int kCheckIntervalHealthyMs = 6000;
     /// Maximum init recovery attempts before staying ERROR.

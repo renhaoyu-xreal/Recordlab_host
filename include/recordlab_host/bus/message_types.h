@@ -31,6 +31,7 @@ constexpr const char* STOP_SCRIPT     = "stop_script";       // payload: {}
 // ── ScriptsActuator → UI ──────────────────────────────────────
 constexpr const char* SCRIPT_OUTPUT   = "script_output";     // payload: {text}
 constexpr const char* SCRIPT_FINISHED = "script_finished";   // payload: {exit_code}
+constexpr const char* SCRIPT_WORKFLOW = "script_workflow";   // payload: {action,title,message,steps,finished,success}
 
 // ── DataReceiver → UI (defined here for completeness) ─────────
 constexpr const char* TOPIC_DATA      = "topic_data";        // payload: {topic_name, value, frequency_hz}

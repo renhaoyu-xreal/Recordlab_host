@@ -7,6 +7,7 @@
 #include "recordlab_host/scripts/scripts_actuator.h"
 
 #include <QMainWindow>
+#include <QStringList>
 #include <QTimer>
 
 #include <memory>

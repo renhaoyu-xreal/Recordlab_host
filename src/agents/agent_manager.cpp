@@ -85,7 +85,9 @@ void AgentManager::handleMessage(const HostMessage& msg) {
         const auto cmd = msg.payload.value("cmd", std::string{});
         const auto params = msg.payload.value("params", nlohmann::json::object());
         int timeout_ms = 5000;
-        if (cmd == "release_device" || cmd == "stop_device" || cmd == "estop") {
+        if (cmd == "start_device") {
+            timeout_ms = 90000;
+        } else if (cmd == "release_device" || cmd == "stop_device" || cmd == "estop") {
             timeout_ms = 10000;
         }
         doCmdRequest(cmd, params, timeout_ms);

@@ -9,14 +9,20 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <deque>
+#include <map>
 #include <memory>
 
 class QLabel;
+class QGroupBox;
 class QListWidget;
 class QListWidgetItem;
 class QPlainTextEdit;
+class QTimer;
 
 namespace recordlab::host::ui {
+
+class SensorCurveWidget;
 
 class SensorWorkspaceWidget : public QWidget {
     Q_OBJECT
@@ -34,9 +40,12 @@ private:
     QWidget* buildLeftPanel();
     QWidget* buildCenterPanel();
     QWidget* buildVideoPlaceholder(const QString& title, QLabel*& image_label, QLabel*& status_label);
-    QWidget* buildCurvePlaceholder(const QString& title);
+    SensorCurveWidget* buildCurveWidget();
     void updateFrequencyLabels(const QString& data_name, const nlohmann::json& value, double frequency);
     void updateSelectedDataFromItem(QListWidgetItem* item);
+    void appendCurveSample(const QString& key, const nlohmann::json& value);
+    void requestCurveRefresh();
+    void refreshSelectedCurves();
     void handleCameraData(const nlohmann::json& value);
     void updateVideoFrame(int camera_index, const nlohmann::json& image_payload);
     void updateVideoFrameFromSharedMemory(int camera_index, const nlohmann::json& image_payload);
@@ -46,7 +55,7 @@ private:
     QListWidget* custom_data_list_ = nullptr;
     QPlainTextEdit* realtime_value_view_ = nullptr;
     QLabel* motion_status_label_ = nullptr;
-    QLabel* selected_data_label_ = nullptr;
+    QGroupBox* curve_group_ = nullptr;
     QString selected_data_name_;
     std::unique_ptr<recordlab::host::CameraSharedMemoryReader> camera_shm_reader_;
     std::array<std::uint64_t, 2> last_camera_shm_seq_{};
@@ -54,6 +63,10 @@ private:
     std::array<QString, 2> last_video_status_text_{};
     std::array<QLabel*, 2> video_image_labels_{};
     std::array<QLabel*, 2> video_status_labels_{};
+    SensorCurveWidget* curve_widget_ = nullptr;
+    std::map<QString, std::deque<std::array<double, 4>>> curve_history_;
+    QTimer* curve_refresh_timer_ = nullptr;
+    bool curve_dirty_ = false;
 };
 
 }  // namespace recordlab::host::ui

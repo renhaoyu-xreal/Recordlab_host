@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QString>
 #include <QWidget>
 
 class QComboBox;
@@ -20,6 +21,7 @@ public:
     QComboBox* commandComboBox() const;
     QPlainTextEdit* commandParamsEdit() const;
     QPlainTextEdit* logView() const;
+    void setDataRoot(const QString& data_root);
 
 signals:
     void commandRequested(const QString& cmd, const QString& params_json);

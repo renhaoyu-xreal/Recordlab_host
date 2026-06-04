@@ -9,15 +9,21 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QSplitter>
+#include <QTimer>
 #include <QVBoxLayout>
+#include <QVector>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
+#include <cmath>
 #include <memory>
 #include <string>
 
@@ -91,7 +97,209 @@ QString dataNameFromListText(const QString& text) {
     return (frequency_pos >= 0 ? text.left(frequency_pos) : text).trimmed();
 }
 
+bool jsonNumberAt(const nlohmann::json& value, std::size_t index, double& out) {
+    if (!value.is_object() || !value.contains("data") || !value["data"].is_array() || value["data"].size() <= index) {
+        return false;
+    }
+    const auto& item = value["data"][index];
+    if (!item.is_number()) {
+        return false;
+    }
+    out = item.get<double>();
+    return std::isfinite(out);
+}
+
 }  // namespace
+
+class SensorCurveWidget : public QWidget {
+public:
+    explicit SensorCurveWidget(QWidget* parent = nullptr) : QWidget(parent) {
+        setMinimumHeight(190);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        setProperty("curve_sample_count", 0);
+    }
+
+    void setSeries(const QString& data_name, const std::deque<std::array<double, 4>>& samples, bool scalar_mode) {
+        selected_data_name_ = data_name;
+        scalar_mode_ = scalar_mode;
+        samples_ = {};
+        samples_.reserve(static_cast<int>(samples.size()));
+        for (const auto& sample : samples) {
+            if (std::isfinite(sample[0]) && std::isfinite(sample[1])
+                && std::isfinite(sample[2]) && std::isfinite(sample[3])) {
+                samples_.push_back(sample);
+            }
+        }
+        setProperty("curve_sample_count", samples_.size());
+        update();
+    }
+
+    void clearSeries(const QString& data_name = {}) {
+        selected_data_name_ = data_name;
+        samples_.clear();
+        setProperty("curve_sample_count", 0);
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        painter.fillRect(rect(), QColor(QStringLiteral("#fafafa")));
+
+        const QRect frame = rect().adjusted(8, 8, -8, -8);
+        painter.setPen(QPen(QColor(QStringLiteral("#c9c9c9"))));
+        painter.drawRect(frame);
+
+        if (samples_.isEmpty()) {
+            painter.setPen(QColor(QStringLiteral("#666666")));
+            const QString placeholder = selected_data_name_.isEmpty()
+                ? QStringLiteral("选择 IMU / time_delay / record_timer 后显示实时曲线。")
+                : QStringLiteral("%1\n等待数据...").arg(selected_data_name_);
+            painter.drawText(frame.adjusted(12, 12, -12, -12),
+                             Qt::AlignCenter | Qt::TextWordWrap,
+                             placeholder);
+            return;
+        }
+
+        const std::array<QString, 3> titles = {
+            scalar_mode_ ? QStringLiteral("Value") : QStringLiteral("X / Value"),
+            QStringLiteral("Y"),
+            QStringLiteral("Z"),
+        };
+        const std::array<QColor, 3> colors = {
+            QColor(QStringLiteral("#cc453a")),
+            QColor(QStringLiteral("#2b8a57")),
+            QColor(QStringLiteral("#2d69c7")),
+        };
+        const std::array<QColor, 3> backgrounds = {
+            QColor(QStringLiteral("#fff1ef")),
+            QColor(QStringLiteral("#effbf4")),
+            QColor(QStringLiteral("#eef4ff")),
+        };
+
+        const int spacing = 10;
+        const int panel_width = std::max(80, (frame.width() - spacing * 2) / 3);
+        const int title_height = 24;
+        const int axis_footer_height = 26;
+        const int stats_height = 42;
+        const int chart_top = frame.top() + title_height + 6;
+        const int chart_bottom = frame.bottom() - axis_footer_height - stats_height - 8;
+        const int chart_height = std::max(34, chart_bottom - chart_top);
+        const double visible_start = samples_.front()[0];
+        const double visible_end = std::max(visible_start, samples_.back()[0]);
+        const double visible_span = std::max(0.001, visible_end - visible_start);
+
+        for (int axis = 0; axis < 3; ++axis) {
+            const QRect panel_rect(frame.left() + axis * (panel_width + spacing),
+                                   frame.top(), panel_width, frame.height());
+            const QRect chart_rect(panel_rect.left() + 44, chart_top,
+                                   panel_rect.width() - 56, chart_height);
+            const QRect stats_rect(panel_rect.left() + 8, panel_rect.bottom() - stats_height,
+                                   panel_rect.width() - 16, stats_height - 4);
+
+            painter.fillRect(panel_rect, backgrounds[axis]);
+            painter.setPen(QPen(QColor(QStringLiteral("#d6d6d6"))));
+            painter.drawRect(panel_rect);
+            painter.setPen(QColor(QStringLiteral("#4f4f4f")));
+            painter.drawText(panel_rect.adjusted(8, 4, -8, -4),
+                             Qt::AlignTop | Qt::AlignHCenter, titles[axis]);
+
+            if (scalar_mode_ && axis > 0) {
+                painter.setPen(QColor(QStringLiteral("#999999")));
+                painter.drawText(chart_rect, Qt::AlignCenter, QStringLiteral("标量数据"));
+                painter.drawText(stats_rect, Qt::AlignCenter, QStringLiteral("--"));
+                continue;
+            }
+
+            double min_value = sampleValue(samples_.front(), axis);
+            double max_value = min_value;
+            double sum = 0.0;
+            double sum_squares = 0.0;
+            for (const auto& sample : samples_) {
+                const double value = sampleValue(sample, axis);
+                min_value = std::min(min_value, value);
+                max_value = std::max(max_value, value);
+                sum += value;
+                sum_squares += value * value;
+            }
+            const double count = static_cast<double>(samples_.size());
+            const double mean = sum / count;
+            const double variance = std::max(0.0, sum_squares / count - mean * mean);
+            const double std_value = std::sqrt(variance);
+            const double pkpk = max_value - min_value;
+            double margin = (max_value - min_value) * 0.15;
+            if (margin < 1e-6) margin = 1.0;
+            min_value -= margin;
+            max_value += margin;
+
+            painter.setPen(QPen(QColor(QStringLiteral("#8b8b8b")), 1));
+            painter.drawLine(chart_rect.bottomLeft(), chart_rect.bottomRight());
+            painter.drawLine(chart_rect.bottomLeft(), chart_rect.topLeft());
+
+            painter.setPen(QPen(QColor(QStringLiteral("#e1e1e1")), 1, Qt::DashLine));
+            for (int tick = 0; tick <= 2; ++tick) {
+                const qreal ratio = tick / 2.0;
+                const int y = chart_rect.bottom() - static_cast<int>(ratio * chart_rect.height());
+                painter.drawLine(chart_rect.left(), y, chart_rect.right(), y);
+                const double tick_value = min_value + ratio * (max_value - min_value);
+                painter.setPen(QColor(QStringLiteral("#6b6b6b")));
+                painter.drawText(QRect(panel_rect.left() + 2, y - 10, 38, 20),
+                                 Qt::AlignRight | Qt::AlignVCenter,
+                                 QStringLiteral("%1").arg(tick_value, 0, 'f', 2));
+                painter.setPen(QPen(QColor(QStringLiteral("#e1e1e1")), 1, Qt::DashLine));
+            }
+            for (int tick = 0; tick <= 2; ++tick) {
+                const qreal ratio = tick / 2.0;
+                const int x = chart_rect.left() + static_cast<int>(ratio * chart_rect.width());
+                painter.drawLine(x, chart_rect.top(), x, chart_rect.bottom());
+            }
+
+            QPainterPath path;
+            for (int i = 0; i < samples_.size(); ++i) {
+                const auto& sample = samples_[i];
+                const double relative_timestamp = std::max(0.0, sample[0] - visible_start);
+                const double time_ratio = std::clamp(relative_timestamp / visible_span, 0.0, 1.0);
+                const double value = sampleValue(sample, axis);
+                const double denominator = max_value - min_value;
+                const double value_ratio = denominator <= 1e-9 ? 0.5 : (value - min_value) / denominator;
+                const qreal x = chart_rect.left() + time_ratio * chart_rect.width();
+                const qreal y = chart_rect.bottom() - value_ratio * chart_rect.height();
+                if (i == 0) path.moveTo(x, y);
+                else path.lineTo(x, y);
+            }
+
+            painter.setPen(QPen(colors[axis], 2));
+            painter.drawPath(path);
+            painter.setPen(QColor(QStringLiteral("#6b6b6b")));
+            painter.drawText(QRect(chart_rect.left(), chart_rect.bottom() + 4, 72, 18),
+                             Qt::AlignLeft | Qt::AlignVCenter,
+                             QStringLiteral("%1").arg(visible_start, 0, 'f', 1));
+            painter.drawText(QRect(chart_rect.center().x() - 44, chart_rect.bottom() + 4, 88, 18),
+                             Qt::AlignHCenter | Qt::AlignVCenter,
+                             QStringLiteral("%1").arg(visible_start + visible_span / 2.0, 0, 'f', 1));
+            painter.drawText(QRect(chart_rect.right() - 72, chart_rect.bottom() + 4, 72, 18),
+                             Qt::AlignRight | Qt::AlignVCenter,
+                             QStringLiteral("%1").arg(visible_end, 0, 'f', 1));
+            painter.setPen(colors[axis].darker(105));
+            painter.drawText(stats_rect, Qt::AlignCenter | Qt::TextWordWrap,
+                             QStringLiteral("mean:%1\nstd:%2  pkpk:%3")
+                                .arg(mean, 0, 'f', 6)
+                                .arg(std_value, 0, 'f', 6)
+                                .arg(pkpk, 0, 'f', 6));
+        }
+    }
+
+private:
+    double sampleValue(const std::array<double, 4>& sample, int axis) const {
+        return sample[static_cast<std::size_t>(axis + 1)];
+    }
+
+    QString selected_data_name_;
+    bool scalar_mode_ = false;
+    QVector<std::array<double, 4>> samples_;
+};
 
 SensorWorkspaceWidget::SensorWorkspaceWidget(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("sensor_workspace_widget"));
@@ -107,8 +315,19 @@ SensorWorkspaceWidget::SensorWorkspaceWidget(QWidget* parent) : QWidget(parent) 
     splitter->addWidget(buildCenterPanel());
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
-    splitter->setSizes({360, 980});
+    splitter->setSizes({320, 1040});
     root_layout->addWidget(splitter);
+
+    curve_refresh_timer_ = new QTimer(this);
+    curve_refresh_timer_->setInterval(16);
+    connect(curve_refresh_timer_, &QTimer::timeout, this, [this]() {
+        if (!curve_dirty_) {
+            return;
+        }
+        curve_dirty_ = false;
+        refreshSelectedCurves();
+    });
+    curve_refresh_timer_->start();
 }
 
 QListWidget* SensorWorkspaceWidget::dataSelectionList() const {
@@ -133,6 +352,7 @@ void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const n
     if (data_name == QStringLiteral("imu_data") && value.is_object()) {
         const int type = value.value("type", 0);
         const QString label = imuLabelForType(type);
+        appendCurveSample(label, value);
         line = QStringLiteral("%1\ntype:%2\n").arg(label).arg(type);
         if (value.contains("data") && value["data"].is_array() && !value["data"].empty()) {
             if (isTemperatureType(type)) {
@@ -146,6 +366,13 @@ void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const n
             }
         }
         realtime_value_view_->setPlainText(line);
+        if (selected_data_name_ == label) {
+            if (isVisible()) {
+                requestCurveRefresh();
+            } else {
+                refreshSelectedCurves();
+            }
+        }
         return;
     }
     if (data_name == QStringLiteral("camera_data") && value.is_object()) {
@@ -268,28 +495,15 @@ QWidget* SensorWorkspaceWidget::buildCenterPanel() {
     camera_layout->addWidget(video_2, 1);
     layout->addWidget(camera_group, 3);
 
-    selected_data_label_ = new QLabel(QStringLiteral("当前选择: 未选择数据"), panel);
-    selected_data_label_->setObjectName(QStringLiteral("selected_data_label"));
-    selected_data_label_->setAlignment(Qt::AlignCenter);
-    selected_data_label_->setStyleSheet(QStringLiteral(
-        "QLabel { background-color: #f0f0f0; border: 1px solid #888; padding: 5px; font-weight: 600; }"));
-    layout->addWidget(selected_data_label_, 0);
-
-    auto* curve_group = new QGroupBox(QStringLiteral("传感器数据曲线"), panel);
-    curve_group->setObjectName(QStringLiteral("curve_preview_group"));
-    auto* curve_layout = new QHBoxLayout(curve_group);
+    curve_group_ = new QGroupBox(QStringLiteral("传感器数据曲线: 未选择数据"), panel);
+    curve_group_->setObjectName(QStringLiteral("curve_preview_group"));
+    auto* curve_layout = new QVBoxLayout(curve_group_);
     curve_layout->setContentsMargins(8, 8, 8, 8);
-    curve_layout->setSpacing(8);
-    auto* curve_1 = buildCurvePlaceholder(QStringLiteral("曲线 1"));
-    curve_1->setObjectName(QStringLiteral("curve_panel_1"));
-    auto* curve_2 = buildCurvePlaceholder(QStringLiteral("曲线 2"));
-    curve_2->setObjectName(QStringLiteral("curve_panel_2"));
-    auto* curve_3 = buildCurvePlaceholder(QStringLiteral("曲线 3"));
-    curve_3->setObjectName(QStringLiteral("curve_panel_3"));
-    curve_layout->addWidget(curve_1, 1);
-    curve_layout->addWidget(curve_2, 1);
-    curve_layout->addWidget(curve_3, 1);
-    layout->addWidget(curve_group, 2);
+    curve_widget_ = buildCurveWidget();
+    curve_widget_->setObjectName(QStringLiteral("curve_plot_widget"));
+    curve_widget_->setProperty("curve_panel_count", 3);
+    curve_layout->addWidget(curve_widget_, 1);
+    layout->addWidget(curve_group_, 2);
 
     return panel;
 }
@@ -364,12 +578,57 @@ void SensorWorkspaceWidget::updateSelectedDataFromItem(QListWidgetItem* item) {
         return;
     }
     selected_data_name_ = dataNameFromListText(item->text());
-    if (!selected_data_label_) {
+    if (curve_group_) {
+        curve_group_->setTitle(selected_data_name_.isEmpty()
+            ? QStringLiteral("传感器数据曲线: 未选择数据")
+            : QStringLiteral("传感器数据曲线: %1").arg(selected_data_name_));
+    }
+    refreshSelectedCurves();
+}
+
+void SensorWorkspaceWidget::appendCurveSample(const QString& key, const nlohmann::json& value) {
+    if (key.isEmpty()) {
         return;
     }
-    selected_data_label_->setText(selected_data_name_.isEmpty()
-        ? QStringLiteral("当前选择: 未选择数据")
-        : QStringLiteral("当前选择: %1").arg(selected_data_name_));
+    auto& history = curve_history_[key];
+    constexpr std::size_t kMaxCurveSamples = 600;
+    const int type = value.value("type", 0);
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+    if (!jsonNumberAt(value, 0, x)) {
+        return;
+    }
+    if (!isTemperatureType(type)) {
+        if (!jsonNumberAt(value, 1, y) || !jsonNumberAt(value, 2, z)) {
+            return;
+        }
+    }
+    const double timestamp = value.value("timestamp", value.value("timestamp_ns", 0.0) / 1e9);
+    const double display_timestamp = timestamp > 0.0
+        ? timestamp
+        : (history.empty() ? 0.0 : history.back()[0] + 0.01);
+    history.push_back({display_timestamp, x, y, z});
+    while (history.size() > kMaxCurveSamples) {
+        history.pop_front();
+    }
+}
+
+void SensorWorkspaceWidget::requestCurveRefresh() {
+    curve_dirty_ = true;
+}
+
+void SensorWorkspaceWidget::refreshSelectedCurves() {
+    const auto history_it = curve_history_.find(selected_data_name_);
+    if (!curve_widget_) {
+        return;
+    }
+    if (history_it == curve_history_.end()) {
+        curve_widget_->clearSeries(selected_data_name_);
+        return;
+    }
+    curve_widget_->setSeries(selected_data_name_, history_it->second,
+                             selected_data_name_.contains(QStringLiteral("temperature")));
 }
 
 void SensorWorkspaceWidget::handleCameraData(const nlohmann::json& value) {
@@ -587,24 +846,8 @@ void SensorWorkspaceWidget::setVideoStatus(int camera_index, const QString& text
     last_update = now;
 }
 
-QWidget* SensorWorkspaceWidget::buildCurvePlaceholder(const QString& title) {
-    auto* frame = new QFrame();
-    frame->setFrameShape(QFrame::StyledPanel);
-    frame->setStyleSheet(QStringLiteral("QFrame { background-color: #fffdf2; border: 1px solid #9a8b62; }"));
-    auto* layout = new QVBoxLayout(frame);
-    layout->setContentsMargins(8, 8, 8, 8);
-    auto* label = new QLabel(title, frame);
-    label->setAlignment(Qt::AlignCenter);
-    label->setStyleSheet(QStringLiteral("font-weight: 600;"));
-    layout->addWidget(label);
-
-    auto* canvas = new QLabel(frame);
-    canvas->setMinimumSize(180, 110);
-    canvas->setAlignment(Qt::AlignCenter);
-    canvas->setText(QStringLiteral("等待实时数据进入当前窗口"));
-    canvas->setStyleSheet(QStringLiteral("QLabel { background-color: #ffffe0; border: 1px solid #b6a86b; color: #5b5537; }"));
-    layout->addWidget(canvas, 1);
-    return frame;
+SensorCurveWidget* SensorWorkspaceWidget::buildCurveWidget() {
+    return new SensorCurveWidget();
 }
 
 }  // namespace recordlab::host::ui

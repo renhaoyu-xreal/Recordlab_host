@@ -75,6 +75,12 @@ int main(int argc, char** argv) {
     require(tabs->count() == 2, "workspace should expose exactly two tabs");
     require(tabs->tabText(0) == QStringLiteral("脚本执行"), "first tab should be script execution");
     require(tabs->tabText(1) == QStringLiteral("数据 + 命令"), "second tab should be data + command");
+    auto* script_output_tabs = workspace->scriptPage()->findChild<QTabWidget*>("script_output_tabs");
+    require(script_output_tabs != nullptr, "script output tabs missing");
+    require(script_output_tabs->tabText(0).startsWith(QStringLiteral("data输出目录：")), "script data tab should include output path");
+    auto* command_data_group = workspace->dataPage()->findChild<QGroupBox*>("command_data_output_group");
+    require(command_data_group != nullptr, "command data output group missing");
+    require(command_data_group->title().startsWith(QStringLiteral("data输出目录：")), "command data group should include output path");
 
     auto* script_workspace = workspace->scriptPage()->sensorWorkspace();
     require(script_workspace->findChild<QGroupBox*>("data_selection_group") != nullptr, "data selection group missing");
@@ -83,12 +89,13 @@ int main(int argc, char** argv) {
     require(script_workspace->findChild<QLabel*>("motion_status_label") != nullptr, "motion status label missing");
     require(script_workspace->findChild<QWidget*>("video_panel_1") != nullptr, "video panel 1 missing");
     require(script_workspace->findChild<QWidget*>("video_panel_2") != nullptr, "video panel 2 missing");
-    require(script_workspace->findChild<QWidget*>("curve_panel_1") != nullptr, "curve panel 1 missing");
-    require(script_workspace->findChild<QWidget*>("curve_panel_2") != nullptr, "curve panel 2 missing");
-    require(script_workspace->findChild<QWidget*>("curve_panel_3") != nullptr, "curve panel 3 missing");
-    auto* selected_label = script_workspace->findChild<QLabel*>("selected_data_label");
-    require(selected_label != nullptr, "selected data label missing");
-    require(selected_label->text() == QStringLiteral("当前选择: 未选择数据"), "selected data should start empty");
+    auto* curve_group = script_workspace->findChild<QGroupBox*>("curve_preview_group");
+    require(curve_group != nullptr, "curve preview group missing");
+    require(curve_group->title() == QStringLiteral("传感器数据曲线: 未选择数据"), "curve group should show empty selection");
+    auto* curve_plot = script_workspace->findChild<QWidget*>("curve_plot_widget");
+    require(curve_plot != nullptr, "curve plot widget missing");
+    require(curve_plot->property("curve_panel_count").toInt() == 3, "curve plot should expose three RecordLabC-style panels");
+    require(script_workspace->findChild<QLabel*>("selected_data_label") == nullptr, "selected data label should not occupy center space");
     require(script_workspace->dataSelectionList()->item(0)->text() == QStringLiteral("IMU0-gyro [--Hz]"), "imu0 gyro initial rate should be unknown");
     require(script_workspace->dataSelectionList()->item(3)->text() == QStringLiteral("IMU0-temperature [--Hz]"), "imu0 temperature initial rate should be unknown");
     require(script_workspace->dataSelectionList()->item(6)->text() == QStringLiteral("IMU1-temperature [--Hz]"), "imu1 temperature initial rate should be unknown");
@@ -100,11 +107,18 @@ int main(int argc, char** argv) {
     require(script_workspace->dataSelectionList()->item(0)->text() == QStringLiteral("IMU0-gyro [1000Hz]"), "imu0 gyro live rate missing");
     require(!script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("Hz")), "realtime values should not display hz");
     require(script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("IMU0-gyro")), "realtime imu label missing");
-    require(selected_label->text() == QStringLiteral("当前选择: 未选择数据"), "realtime data should not change selected data");
+    require(curve_group->title() == QStringLiteral("传感器数据曲线: 未选择数据"), "realtime data should not change selected data");
 
     script_workspace->dataSelectionList()->setCurrentRow(0);
     QApplication::processEvents();
-    require(selected_label->text() == QStringLiteral("当前选择: IMU0-gyro"), "selected data should follow user list selection");
+    require(curve_group->title() == QStringLiteral("传感器数据曲线: IMU0-gyro"), "selected data should follow curve title");
+    require(curve_plot->property("curve_sample_count").toInt() == 1, "selected imu curve should expose first sample");
+    script_workspace->handleRealtimeData(QStringLiteral("imu_data"), nlohmann::json{
+        {"type", 1},
+        {"data", {2.0, 3.0, 4.0, 0.0, 0.0, 0.0}},
+    }, 1000.0);
+    QApplication::processEvents();
+    require(curve_plot->property("curve_sample_count").toInt() == 2, "selected imu curve should update as data arrives");
 
     script_workspace->handleRealtimeData(QStringLiteral("camera_data"), nlohmann::json{
         {"timestamp", 1},
@@ -125,11 +139,11 @@ int main(int argc, char** argv) {
         saw_camera_status = saw_camera_status || label->text().contains(QStringLiteral("cam 0 | 2 x 2"));
     }
     require(saw_camera_status, "camera frame status missing");
-    require(selected_label->text() == QStringLiteral("当前选择: IMU0-gyro"), "camera frames should not change selected data");
+    require(curve_group->title() == QStringLiteral("传感器数据曲线: IMU0-gyro"), "camera frames should not change selected data");
 
     auto* data_workspace = workspace->dataPage()->sensorWorkspace();
     require(data_workspace->findChild<QWidget*>("video_panel_1") != nullptr, "data page video panel missing");
-    require(data_workspace->findChild<QWidget*>("curve_panel_3") != nullptr, "data page curve panel missing");
+    require(data_workspace->findChild<QWidget*>("curve_plot_widget") != nullptr, "data page curve plot missing");
     require(workspace->scriptPage()->scriptList() != nullptr, "script list missing");
     require(workspace->dataPage()->commandComboBox() != nullptr, "command combo box missing");
     require(workspace->dataPage()->commandComboBox()->findText(QStringLiteral("init_device")) >= 0, "init_device command option missing");

@@ -1,5 +1,6 @@
 #include "recordlab_host/ui/data_page.h"
 
+#include "recordlab_host/ui/data_output_directory_widget.h"
 #include "recordlab_host/ui/sensor_workspace_widget.h"
 
 #include <QComboBox>
@@ -26,8 +27,8 @@ DataPage::DataPage(QWidget* parent) : QWidget(parent) {
     top_splitter->addWidget(sensor_workspace_);
 
     auto* right_pane = new QWidget(top_splitter);
-    right_pane->setMinimumWidth(280);
-    right_pane->setMaximumWidth(380);
+    right_pane->setMinimumWidth(260);
+    right_pane->setMaximumWidth(340);
     auto* right_layout = new QVBoxLayout(right_pane);
     right_layout->setContentsMargins(0, 0, 0, 0);
     right_layout->setSpacing(10);
@@ -102,7 +103,7 @@ DataPage::DataPage(QWidget* parent) : QWidget(parent) {
     top_splitter->addWidget(right_pane);
     top_splitter->setStretchFactor(0, 1);
     top_splitter->setStretchFactor(1, 0);
-    top_splitter->setSizes({1100, 320});
+    top_splitter->setSizes({1180, 280});
     root_layout->addWidget(top_splitter, 4);
 
     auto* bottom_splitter = new QSplitter(Qt::Horizontal, this);
@@ -119,15 +120,17 @@ DataPage::DataPage(QWidget* parent) : QWidget(parent) {
     log_layout->addWidget(log_view_);
     bottom_splitter->addWidget(log_group);
 
-    auto* data_group = new QGroupBox(QStringLiteral("data 输出目录"), bottom_splitter);
+    auto* data_group = new QGroupBox(QStringLiteral("data输出目录"), bottom_splitter);
+    data_group->setObjectName(QStringLiteral("command_data_output_group"));
     auto* data_layout = new QVBoxLayout(data_group);
-    auto* data_label = new QLabel(QStringLiteral("third_party/Recordlab_nodes/data"), data_group);
-    data_label->setObjectName(QStringLiteral("command_data_output_label"));
-    data_label->setWordWrap(true);
-    data_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    data_label->setStyleSheet(QStringLiteral("QLabel { background-color: #fffdf2; border: 1px solid #c8b36a; padding: 8px; }"));
-    data_layout->addWidget(data_label);
-    data_layout->addStretch(1);
+    auto* data_output = new DataOutputDirectoryWidget(QStringLiteral("third_party/Recordlab_nodes/data"), data_group);
+    data_output->setObjectName(QStringLiteral("command_data_output_widget"));
+    data_group->setTitle(data_output->titleText());
+    connect(data_output, &DataOutputDirectoryWidget::messageReady, this, [this](const QString& message) {
+        if (log_view_) log_view_->appendPlainText(message);
+    });
+    connect(data_output, &DataOutputDirectoryWidget::titleChanged, data_group, &QGroupBox::setTitle);
+    data_layout->addWidget(data_output);
     bottom_splitter->addWidget(data_group);
     bottom_splitter->setStretchFactor(0, 1);
     bottom_splitter->setStretchFactor(1, 1);
@@ -153,6 +156,12 @@ QPlainTextEdit* DataPage::commandParamsEdit() const {
 
 QPlainTextEdit* DataPage::logView() const {
     return log_view_;
+}
+
+void DataPage::setDataRoot(const QString& data_root) {
+    if (auto* widget = findChild<DataOutputDirectoryWidget*>(QStringLiteral("command_data_output_widget"))) {
+        widget->setRootPath(data_root);
+    }
 }
 
 }  // namespace recordlab::host::ui

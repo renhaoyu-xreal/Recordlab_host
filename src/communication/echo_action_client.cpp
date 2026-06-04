@@ -12,6 +12,14 @@
 namespace recordlab::host {
 namespace {
 
+struct PendingActionState {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool done = false;
+    bool abandoned = false;
+    ActionResult result;
+};
+
 bool canConnectTcp(const std::string& host, int port) {
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
@@ -75,23 +83,23 @@ ActionResult EchoActionClient::sendCommand(const std::string& cmd, const nlohman
         "send command cmd=" + cmd + ", timeout_ms=" + std::to_string(timeout_ms) +
             ", params=" + params.dump());
 
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool done = false;
-    ActionResult result;
+    auto state = std::make_shared<PendingActionState>();
 
     try {
         uint32_t goal_id = client_->sendGoal(
             {{"cmd", cmd}, {"params", params}},
             nullptr,
-            [&](uint32_t id, const nlohmann::json& payload, bool success) {
-                std::lock_guard<std::mutex> lock(mutex);
-                result.goal_id = std::to_string(id);
-                result.result = payload;
-                result.success = success;
-                result.status = success ? "SUCCEEDED" : "FAILED";
-                done = true;
-                cv.notify_one();
+            [state](uint32_t id, const nlohmann::json& payload, bool success) {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                if (state->abandoned) {
+                    return;
+                }
+                state->result.goal_id = std::to_string(id);
+                state->result.result = payload;
+                state->result.success = success;
+                state->result.status = success ? "SUCCEEDED" : "FAILED";
+                state->done = true;
+                state->cv.notify_one();
             });
         common::Logger::instance().log(
             common::LogLevel::Info,
@@ -106,14 +114,16 @@ ActionResult EchoActionClient::sendCommand(const std::string& cmd, const nlohman
         return {"", nlohmann::json{{"message", message}}, message, false};
     }
 
-    std::unique_lock<std::mutex> lock(mutex);
-    if (!cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&]() { return done; })) {
+    std::unique_lock<std::mutex> lock(state->mutex);
+    if (!state->cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&]() { return state->done; })) {
+        state->abandoned = true;
         common::Logger::instance().log(
             common::LogLevel::Error,
             "EchoActionClient",
             "timeout waiting result cmd=" + cmd);
         return {"", nlohmann::json{{"message", "Timed out waiting for action result"}}, "TIMEOUT", false};
     }
+    ActionResult result = state->result;
     common::Logger::instance().log(
         result.success ? common::LogLevel::Info : common::LogLevel::Warn,
         "EchoActionClient",

@@ -31,6 +31,7 @@ add_library(recordlab_host
   include/recordlab_host/lifecycle/agent_health_state.h
   include/recordlab_host/lifecycle/watchdog.h
   include/recordlab_host/ui/data_page.h
+  include/recordlab_host/ui/data_output_directory_widget.h
   include/recordlab_host/ui/entry_page.h
   include/recordlab_host/ui/main_window.h
   include/recordlab_host/ui/script_page.h
@@ -56,6 +57,7 @@ add_library(recordlab_host
   src/data/data_receiver.cpp
   src/scripts/scripts_actuator.cpp
   src/ui/data_page.cpp
+  src/ui/data_output_directory_widget.cpp
   src/ui/entry_page.cpp
   src/ui/main_window.cpp
   src/ui/script_page.cpp
