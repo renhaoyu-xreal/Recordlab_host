@@ -78,7 +78,8 @@ void Watchdog::workerLoop() {
             next = doCheck();
             if (next == AgentHealthState::INITIALIZING) {
                 common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
-                    "state transition: DISCONNECTED → INITIALIZING agent=" + agent_name_);
+                    "state transition: DISCONNECTED → INITIALIZING agent=" + agent_name_,
+                    {{"agent_name", agent_name_}, {"state", "INITIALIZING"}});
                 state_ = AgentHealthState::INITIALIZING;
                 publishState(AgentHealthState::INITIALIZING, last_reason_);
                 current = AgentHealthState::INITIALIZING;
@@ -100,7 +101,8 @@ void Watchdog::workerLoop() {
             const auto old_s = ::recordlab::host::to_string(current);
             const auto new_s = ::recordlab::host::to_string(next);
             common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
-                "state transition: " + old_s + " → " + new_s + " agent=" + agent_name_);
+                "state transition: " + old_s + " → " + new_s + " agent=" + agent_name_,
+                {{"agent_name", agent_name_}, {"from_state", old_s}, {"state", new_s}});
         }
         state_ = next;
 
@@ -121,10 +123,10 @@ void Watchdog::workerLoop() {
 }
 
 AgentHealthState Watchdog::doCheck() {
-    common::Logger::instance().log(common::LogLevel::Debug, "Watchdog",
-        "sending check for agent=" + agent_name_);
-
     const auto request_id = makeWatchdogRequestId(agent_name_, "check");
+    common::Logger::instance().log(common::LogLevel::Debug, "Watchdog",
+        "sending check for agent=" + agent_name_,
+        {{"request_id", request_id}, {"agent_name", agent_name_}, {"cmd", "check"}});
     bus_.publish({
         .request_id = request_id,
         .source = msg::WATCHDOG, .target = msg::AGENT_MANAGER, .type = msg::CMD_REQUEST,
@@ -145,7 +147,8 @@ AgentHealthState Watchdog::doCheck() {
         common::Logger::instance().log(common::LogLevel::Warn, "Watchdog",
             "check failed for agent=" + agent_name_ +
             " (consecutive=" + std::to_string(consecutive_failures_) + "/"
-            + std::to_string(kMaxCheckFailures) + ")");
+            + std::to_string(kMaxCheckFailures) + ")",
+            {{"request_id", request_id}, {"agent_name", agent_name_}, {"cmd", "check"}});
         return AgentHealthState::DISCONNECTED;
     }
 
@@ -155,7 +158,8 @@ AgentHealthState Watchdog::doCheck() {
         last_reason_ = "check_failed";
         common::Logger::instance().log(common::LogLevel::Warn, "Watchdog",
             "check returned failure for agent=" + agent_name_ +
-            " (consecutive=" + std::to_string(consecutive_failures_) + ")");
+            " (consecutive=" + std::to_string(consecutive_failures_) + ")",
+            {{"request_id", request_id}, {"agent_name", agent_name_}, {"cmd", "check"}});
         return AgentHealthState::DISCONNECTED;
     }
 
@@ -173,10 +177,10 @@ AgentHealthState Watchdog::doCheck() {
 }
 
 AgentHealthState Watchdog::doInitDevice() {
-    common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
-        "triggering init_device for agent=" + agent_name_);
-
     const auto request_id = makeWatchdogRequestId(agent_name_, "init_device");
+    common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
+        "triggering init_device for agent=" + agent_name_,
+        {{"request_id", request_id}, {"agent_name", agent_name_}, {"cmd", "init_device"}});
     bus_.publish({
         .request_id = request_id,
         .source = msg::WATCHDOG, .target = msg::AGENT_MANAGER, .type = msg::INIT_DEVICE,
@@ -187,7 +191,8 @@ AgentHealthState Watchdog::doInitDevice() {
     if (!opt) {
         last_reason_ = "init_device_timeout";
         common::Logger::instance().log(common::LogLevel::Error, "Watchdog",
-            "init_device timeout/failure for agent=" + agent_name_);
+            "init_device timeout/failure for agent=" + agent_name_,
+            {{"request_id", request_id}, {"agent_name", agent_name_}, {"cmd", "init_device"}});
         return AgentHealthState::ERROR;
     }
 
@@ -195,14 +200,16 @@ AgentHealthState Watchdog::doInitDevice() {
     if (!success) {
         last_reason_ = "init_device_failed";
         common::Logger::instance().log(common::LogLevel::Error, "Watchdog",
-            "init_device failed for agent=" + agent_name_);
+            "init_device failed for agent=" + agent_name_,
+            {{"request_id", request_id}, {"agent_name", agent_name_}, {"cmd", "init_device"}});
         return AgentHealthState::ERROR;
     }
 
     consecutive_failures_ = 0;
     last_reason_ = "init_device_succeeded";
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
-        "init_device succeeded for agent=" + agent_name_);
+        "init_device succeeded for agent=" + agent_name_,
+        {{"request_id", request_id}, {"agent_name", agent_name_}, {"cmd", "init_device"}});
     return AgentHealthState::HEALTHY;
 }
 

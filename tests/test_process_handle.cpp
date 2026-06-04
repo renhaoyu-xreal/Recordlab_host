@@ -6,9 +6,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <signal.h>
 #include <string>
 #include <thread>
+#include <vector>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -59,6 +61,43 @@ int main() {
     assert(process.wait(3000) != -1);
     assert(readText(cwd / "env.txt") == "recordlab:test:path");
     assert(readText(cwd / "cwd.txt") == cwd.string());
+
+    std::mutex output_mutex;
+    std::vector<nlohmann::json> outputs;
+    process.start({"/bin/sh", "-c",
+                   "printf 'node stdout\\n'; printf 'node stderr\\n' >&2"},
+                  cwd.string(), "",
+                  {
+                      .process = "node",
+                      .agent_name = "imu_proxy",
+                      .node_name = "imu_proxy",
+                  },
+                  [&](nlohmann::json payload) {
+                      std::lock_guard<std::mutex> lock(output_mutex);
+                      outputs.push_back(std::move(payload));
+                  });
+    assert(process.wait(3000) != -1);
+    bool saw_stdout = false;
+    bool saw_stderr = false;
+    {
+        std::lock_guard<std::mutex> lock(output_mutex);
+        for (const auto& output : outputs) {
+            assert(output.value("process", std::string{}) == "node");
+            assert(output.value("agent_name", std::string{}) == "imu_proxy");
+            assert(output.value("node_name", std::string{}) == "imu_proxy");
+            assert(output.value("pid", 0) > 0);
+            if (output.value("stream", std::string{}) == "stdout" &&
+                output.value("text", std::string{}) == "node stdout") {
+                saw_stdout = true;
+            }
+            if (output.value("stream", std::string{}) == "stderr" &&
+                output.value("text", std::string{}) == "node stderr") {
+                saw_stderr = true;
+            }
+        }
+    }
+    assert(saw_stdout);
+    assert(saw_stderr);
 
     process.start({"/bin/sh", "-c", "sleep 30"}, cwd.string(), "");
     const int first_pid = process.pid();

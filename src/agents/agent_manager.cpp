@@ -113,7 +113,12 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
                 ", action=" + config.action_name +
                 ", goal_port=" + std::to_string(config.goal_port) +
                 ", feedback_port=" + std::to_string(config.feedback_port) +
-                ", topics=[" + describeTopics(config.topics) + "]");
+                ", topics=[" + describeTopics(config.topics) + "]",
+            {
+                {"request_id", last_request_id_},
+                {"agent_name", config.name},
+                {"node_name", config.name},
+            });
         AgentProxy& agent = getOrCreateAgent(config);
         if (agent.launchOrConnect()) {
             publishResult(msg::LOG_ENTRY, {{"message", "Agent " + agent_name + " 连接成功，等待 Watchdog 初始化"}});
@@ -178,8 +183,24 @@ void AgentManager::doCmdRequest(const std::string& agent_name, const std::string
         if (!silent) {
             publishResult(msg::LOG_ENTRY, {{"message", "发送命令: " + cmd + " " + params.dump()}});
         }
+        common::Logger::instance().log(common::LogLevel::Info, "AgentManager", "sending command", {
+            {"request_id", last_request_id_},
+            {"agent_name", target_agent},
+            {"cmd", cmd},
+        });
         const auto result = agent->cmd(cmd, params, 5000);
         const auto message = result.result.value("message", result.result.dump());
+        common::Logger::instance().log(
+            result.success ? common::LogLevel::Info : common::LogLevel::Warn,
+            "AgentManager",
+            "command result",
+            {
+                {"request_id", last_request_id_},
+                {"agent_name", target_agent},
+                {"cmd", cmd},
+                {"success", result.success},
+                {"message", message},
+            });
         publishResult(msg::CMD_RESULT, {
             {"agent_name", target_agent},
             {"cmd", cmd},
@@ -190,6 +211,12 @@ void AgentManager::doCmdRequest(const std::string& agent_name, const std::string
             publishResult(msg::LOG_ENTRY, {{"message", cmd + ": " + message}});
         }
     } catch (const std::exception& e) {
+        common::Logger::instance().log(common::LogLevel::Error, "AgentManager", "command exception", {
+            {"request_id", last_request_id_},
+            {"agent_name", target_agent},
+            {"cmd", cmd},
+            {"message", e.what()},
+        });
         publishResult(msg::CMD_RESULT, {
             {"agent_name", target_agent},
             {"cmd", cmd},
@@ -227,7 +254,19 @@ AgentProxy& AgentManager::getOrCreateAgent(const AgentConfig& config) {
     if (it == agents_.end()) {
         it = agents_.emplace(
             config.name,
-            std::make_unique<AgentProxy>(config, agents_config_path_, nodes_root_, echo_python_root_)).first;
+            std::make_unique<AgentProxy>(
+                config,
+                agents_config_path_,
+                nodes_root_,
+                echo_python_root_,
+                [this](nlohmann::json payload) {
+                    bus_.publish({
+                        .source = msg::AGENT_MANAGER,
+                        .target = msg::UI,
+                        .type = msg::PROCESS_OUTPUT,
+                        .payload = std::move(payload),
+                    });
+                })).first;
     }
     active_agent_ = config.name;
     return *it->second;

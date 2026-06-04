@@ -5,6 +5,7 @@
 #include "recordlab_host/communication/echo_action_client.h"
 
 #include <memory>
+#include <functional>
 #include <string>
 
 namespace recordlab::host {
@@ -15,8 +16,11 @@ namespace recordlab::host {
 /// It does not own device objects, topic subscriptions, workflow state, or UI.
 class AgentProxy {
 public:
+    using ProcessOutputCallback = std::function<void(nlohmann::json)>;
+
     AgentProxy(AgentConfig config, std::string agents_config_path,
-               std::string nodes_root, std::string echo_python_root);
+               std::string nodes_root, std::string echo_python_root,
+               ProcessOutputCallback process_output_callback = {});
     ~AgentProxy();
 
     AgentProxy(const AgentProxy&) = delete;
@@ -39,6 +43,7 @@ private:
     std::string agents_config_path_;
     std::string nodes_root_;
     std::string echo_python_root_;
+    ProcessOutputCallback process_output_callback_;
 
     std::unique_ptr<ProcessHandle> node_process_;
     std::unique_ptr<EchoActionClient> action_client_;

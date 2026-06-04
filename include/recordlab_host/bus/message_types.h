@@ -32,9 +32,12 @@ constexpr const char* RUN_SCRIPT      = "run_script";        // payload: {script
 constexpr const char* STOP_SCRIPT     = "stop_script";       // payload: {}
 
 // ── ScriptsActuator → UI ──────────────────────────────────────
-constexpr const char* SCRIPT_STARTED  = "script_started";    // payload: {script_path, agent_name, pid}
-constexpr const char* SCRIPT_OUTPUT   = "script_output";     // payload: {text}
-constexpr const char* SCRIPT_FINISHED = "script_finished";   // payload: {exit_code}
+constexpr const char* SCRIPT_STARTED  = "script_started";    // payload: {script_id, script_path, agent_name, pid}
+constexpr const char* SCRIPT_OUTPUT   = "script_output";     // payload: {text, stream, process, script_path, pid, script_id}
+constexpr const char* SCRIPT_FINISHED = "script_finished";   // payload: {script_id, script_path, pid, exit_code}
+
+// ── Process output → UI ───────────────────────────────────────
+constexpr const char* PROCESS_OUTPUT  = "process_output";    // payload: {text, stream, process, pid, agent_name, node_name}
 
 // ── DataReceiver → UI (defined here for completeness) ─────────
 constexpr const char* TOPIC_DATA      = "topic_data";        // payload: {topic_name, value, frequency_hz}

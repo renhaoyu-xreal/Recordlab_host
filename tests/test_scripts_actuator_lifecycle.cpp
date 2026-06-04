@@ -37,6 +37,8 @@ int main(int argc, char** argv) {
     {
         std::ofstream out(script);
         out << "print('script lifecycle hello', flush=True)\n";
+        out << "import sys\n";
+        out << "print('script lifecycle error', file=sys.stderr, flush=True)\n";
     }
 
     recordlab::host::HostMessageBus bus;
@@ -44,8 +46,10 @@ int main(int argc, char** argv) {
 
     bool saw_started = false;
     bool saw_finished = false;
-    bool saw_output = false;
+    bool saw_stdout = false;
+    bool saw_stderr = false;
     int exit_code = -1;
+    std::string script_id;
 
     {
         recordlab::host::ScriptsActuator actuator(
@@ -70,16 +74,38 @@ int main(int argc, char** argv) {
             for (const auto& msg : bus.drainFor(recordlab::host::msg::UI)) {
                 if (msg.type == recordlab::host::msg::SCRIPT_STARTED) {
                     saw_started = true;
+                    script_id = msg.payload.value("script_id", std::string{});
+                    require(!script_id.empty(), "script_started should include script_id");
                     require(msg.payload.value("script_path", std::string{}) == script.string(),
                             "script_started should include resolved script_path");
                     require(msg.payload.value("agent_name", std::string{}) == "imu_proxy",
                             "script_started should include agent_name");
                     require(msg.payload.value("pid", 0) > 0, "script_started should include pid");
                 } else if (msg.type == recordlab::host::msg::SCRIPT_OUTPUT) {
-                    saw_output = true;
+                    require(msg.payload.value("process", std::string{}) == "script",
+                            "script_output should identify script process");
+                    require(msg.payload.value("script_path", std::string{}) == script.string(),
+                            "script_output should include script_path");
+                    require(msg.payload.value("pid", 0) > 0, "script_output should include pid");
+                    const auto output_script_id = msg.payload.value("script_id", std::string{});
+                    require(!output_script_id.empty(), "script_output should include script_id");
+                    if (!script_id.empty()) {
+                        require(output_script_id == script_id, "script_output should include matching script_id");
+                    }
+                    const auto stream = msg.payload.value("stream", std::string{});
+                    if (stream == "stdout") {
+                        saw_stdout = true;
+                    } else if (stream == "stderr") {
+                        saw_stderr = true;
+                    }
                 } else if (msg.type == recordlab::host::msg::SCRIPT_FINISHED) {
                     saw_finished = true;
                     exit_code = msg.payload.value("exit_code", -1);
+                    require(msg.payload.value("script_id", std::string{}) == script_id,
+                            "script_finished should include matching script_id");
+                    require(msg.payload.value("script_path", std::string{}) == script.string(),
+                            "script_finished should include script_path");
+                    require(msg.payload.value("pid", 0) > 0, "script_finished should include pid");
                 }
             }
             QThread::msleep(10);
@@ -88,7 +114,8 @@ int main(int argc, char** argv) {
 
     fs::remove_all(tmp);
     require(saw_started, "script_started missing");
-    require(saw_output, "script_output missing");
+    require(saw_stdout, "script stdout missing");
+    require(saw_stderr, "script stderr missing");
     require(saw_finished, "script_finished missing");
     require(exit_code == 0, "script should exit successfully");
 

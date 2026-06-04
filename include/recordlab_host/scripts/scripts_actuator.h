@@ -39,6 +39,10 @@ private:
     QString agents_config_path_;
     std::unique_ptr<QProcess> script_process_;
     QTimer* poll_timer_ = nullptr;
+    std::string current_script_id_;
+    std::string current_script_path_;
+    std::string current_agent_name_;
+    long long current_script_pid_ = 0;
 };
 
 }  // namespace recordlab::host

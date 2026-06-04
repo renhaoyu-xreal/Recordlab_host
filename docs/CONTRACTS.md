@@ -36,7 +36,15 @@
 - `LOG_ENTRY` 继续用于人可读日志展示，不作为状态机判断依据。
 - `SCRIPT_FINISHED` 继续表示脚本进程退出。
 
-  
+## PR 边界：Logger 定位字段与进程输出来源
+
+此 PR 只增强日志定位信息和进程输出来源，不改变
+`AgentManager`、`Watchdog`、`AgentProxy`、`ScriptsActuator` 边界。
+
+- `Logger::log()` 支持可选结构化 context，旧接口保持兼容。
+- `script_output` 保留 `text`，增加脚本来源字段。
+- `process_output` 用于本地 node stdout/stderr 的结构化来源。
+- `log_entry` 继续用于人可读日志展示。
 
 ## 消息类型
 
@@ -53,9 +61,10 @@
 | `log_entry`       | 主机模块                        | UI                      | `{message}`                                                  |
 | `run_script`      | UI                              | ScriptsActuator         | `{script_path, agent_name}`                                  |
 | `stop_script`     | UI                              | ScriptsActuator         | `{}`                                                         |
-| `script_started`  | ScriptsActuator                 | UI                      | `{script_path, agent_name, pid}`                             |
-| `script_output`   | ScriptsActuator                 | UI                      | `{text}`                                                     |
-| `script_finished` | ScriptsActuator                 | UI                      | `{exit_code}`                                                |
+| `script_started`  | ScriptsActuator                 | UI                      | `{script_id, script_path, agent_name, pid}`                  |
+| `script_output`   | ScriptsActuator                 | UI                      | `{text, stream, process, script_path, pid, script_id}`       |
+| `script_finished` | ScriptsActuator                 | UI                      | `{script_id, script_path, pid, exit_code}`                   |
+| `process_output`  | AgentManager/ProcessHandle      | UI                      | `{text, stream, process, pid, agent_name, node_name}`        |
 | `topic_data`      | DataReceiver                    | UI                      | `{topic_name, value, frequency_hz, first_message}`           |
 
 `cmd_request` 向后兼容旧载荷 `{cmd, params}`；当
@@ -95,6 +104,18 @@
 | `stop_record`  | UI/scripts   | Python 节点 action handler |
 
 AgentProxy 只负责传输命令。命令的具体实现属于节点。
+
+## Logger 定位字段
+
+`Logger::log()` 支持可选结构化 context。优先使用以下字段定位错误：
+
+| 字段         | 含义                               |
+| ------------ | ---------------------------------- |
+| `request_id` | Host 内部请求/响应匹配 ID。        |
+| `agent_name` | 目标 agent。                       |
+| `node_name`  | node 名称；当前默认等同 agent 名。 |
+| `script_id`  | ScriptsActuator 为脚本运行生成的 ID。 |
+| `cmd`        | agent/node 命令名。                |
 
 ## 标准静态 Topics
 

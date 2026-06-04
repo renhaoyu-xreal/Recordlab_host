@@ -88,6 +88,7 @@ foreach(test_name
   test_agent_manager_proxy_integration
   test_echo_topic_encoding
   test_host_message_bus
+  test_logger_context
   test_process_handle
   test_scripts_actuator_lifecycle
   test_echo_python_integration

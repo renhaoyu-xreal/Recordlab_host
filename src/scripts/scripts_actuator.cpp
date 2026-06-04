@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QProcessEnvironment>
+#include <QUuid>
 
 namespace recordlab::host {
 
@@ -50,6 +51,10 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
         return;
     }
 
+    current_script_id_ = "script_" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+    current_script_path_ = resolved.toStdString();
+    current_agent_name_ = agent_name;
+    current_script_pid_ = 0;
     script_process_ = std::make_unique<QProcess>();
     script_process_->setWorkingDirectory(nodes_root_);
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
@@ -69,28 +74,87 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
     connect(script_process_.get(), &QProcess::readyReadStandardOutput, this, [this]() {
         const auto text = QString::fromUtf8(script_process_->readAllStandardOutput()).trimmed();
         if (!text.isEmpty()) {
-            publishToUI(msg::SCRIPT_OUTPUT, {{"text", text.toStdString()}});
-            publishToUI(msg::LOG_ENTRY, {{"message", text.toStdString()}});
+            const auto pid = current_script_pid_ > 0
+                ? current_script_pid_
+                : static_cast<long long>(script_process_->processId());
+            publishToUI(msg::SCRIPT_OUTPUT, {
+                {"text", text.toStdString()},
+                {"stream", "stdout"},
+                {"process", "script"},
+                {"script_path", current_script_path_},
+                {"pid", pid},
+                {"script_id", current_script_id_},
+            });
+            common::Logger::instance().log(common::LogLevel::Info, "ScriptsActuator", text.toStdString(), {
+                {"stream", "stdout"},
+                {"process", "script"},
+                {"script_path", current_script_path_},
+                {"pid", pid},
+                {"script_id", current_script_id_},
+            });
         }
     });
     connect(script_process_.get(), &QProcess::readyReadStandardError, this, [this]() {
         const auto text = QString::fromUtf8(script_process_->readAllStandardError()).trimmed();
         if (!text.isEmpty()) {
-            publishToUI(msg::SCRIPT_OUTPUT, {{"text", text.toStdString()}});
-            publishToUI(msg::LOG_ENTRY, {{"message", text.toStdString()}});
+            const auto pid = current_script_pid_ > 0
+                ? current_script_pid_
+                : static_cast<long long>(script_process_->processId());
+            publishToUI(msg::SCRIPT_OUTPUT, {
+                {"text", text.toStdString()},
+                {"stream", "stderr"},
+                {"process", "script"},
+                {"script_path", current_script_path_},
+                {"pid", pid},
+                {"script_id", current_script_id_},
+            });
+            common::Logger::instance().log(common::LogLevel::Warn, "ScriptsActuator", text.toStdString(), {
+                {"stream", "stderr"},
+                {"process", "script"},
+                {"script_path", current_script_path_},
+                {"pid", pid},
+                {"script_id", current_script_id_},
+            });
         }
     });
-    connect(script_process_.get(), &QProcess::started, this, [this, resolved, agent_name]() {
+    connect(script_process_.get(), &QProcess::started, this, [this]() {
+        const auto pid = static_cast<long long>(script_process_->processId());
+        current_script_pid_ = pid;
         publishToUI(msg::SCRIPT_STARTED, {
-            {"script_path", resolved.toStdString()},
-            {"agent_name", agent_name},
-            {"pid", static_cast<qint64>(script_process_->processId())},
+            {"script_id", current_script_id_},
+            {"script_path", current_script_path_},
+            {"agent_name", current_agent_name_},
+            {"pid", pid},
+        });
+        common::Logger::instance().log(common::LogLevel::Info, "ScriptsActuator", "script started", {
+            {"script_id", current_script_id_},
+            {"script_path", current_script_path_},
+            {"agent_name", current_agent_name_},
+            {"pid", pid},
         });
     });
     connect(script_process_.get(), qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
             this, [this](int exit_code, QProcess::ExitStatus) {
-        publishToUI(msg::SCRIPT_FINISHED, {{"exit_code", exit_code}});
-        publishToUI(msg::LOG_ENTRY, {{"message", "脚本退出: " + std::to_string(exit_code)}});
+        const auto pid = current_script_pid_;
+        publishToUI(msg::SCRIPT_FINISHED, {
+            {"script_id", current_script_id_},
+            {"script_path", current_script_path_},
+            {"pid", pid},
+            {"exit_code", exit_code},
+        });
+        publishToUI(msg::LOG_ENTRY, {
+            {"message", "脚本退出: " + std::to_string(exit_code)},
+            {"process", "script"},
+            {"script_path", current_script_path_},
+            {"pid", pid},
+            {"script_id", current_script_id_},
+        });
+        common::Logger::instance().log(common::LogLevel::Info, "ScriptsActuator", "script finished", {
+            {"script_id", current_script_id_},
+            {"script_path", current_script_path_},
+            {"pid", pid},
+            {"exit_code", exit_code},
+        });
     });
 
     publishToUI(msg::LOG_ENTRY, {{"message", "运行脚本: " + resolved.toStdString()}});

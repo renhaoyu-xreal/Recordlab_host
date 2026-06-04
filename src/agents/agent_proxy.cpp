@@ -9,11 +9,13 @@
 namespace recordlab::host {
 
 AgentProxy::AgentProxy(AgentConfig config, std::string agents_config_path,
-                       std::string nodes_root, std::string echo_python_root)
+                       std::string nodes_root, std::string echo_python_root,
+                       ProcessOutputCallback process_output_callback)
     : config_(std::move(config)),
       agents_config_path_(std::move(agents_config_path)),
       nodes_root_(std::move(nodes_root)),
-      echo_python_root_(std::move(echo_python_root)) {}
+      echo_python_root_(std::move(echo_python_root)),
+      process_output_callback_(std::move(process_output_callback)) {}
 
 AgentProxy::~AgentProxy() {
     disconnect();
@@ -38,11 +40,17 @@ bool AgentProxy::launchOrConnect() {
         startNodeProcess();
     } else {
         common::Logger::instance().log(
-            common::LogLevel::Info,
-            "AgentProxy",
-            "connect remote/external node agent=" + config_.name +
-                ", process_type=" + config_.process_type +
-                ", host=" + config_.subnode_host);
+        common::LogLevel::Info,
+        "AgentProxy",
+        "connect remote/external node agent=" + config_.name +
+            ", process_type=" + config_.process_type +
+            ", host=" + config_.subnode_host,
+        {
+            {"process", "node"},
+            {"agent_name", config_.name},
+            {"node_name", config_.name},
+            {"process_type", config_.process_type},
+        });
     }
 
     connected_ = ensureClient();
@@ -82,11 +90,23 @@ void AgentProxy::startNodeProcess() {
         "launch node_runtime agent=" + config_.name +
             ", python=" + python_bin +
             ", cwd=" + nodes_root_ +
-            ", pythonpath=" + pythonpath);
+            ", pythonpath=" + pythonpath,
+        {
+            {"process", "node"},
+            {"agent_name", config_.name},
+            {"node_name", config_.name},
+            {"process_type", config_.process_type.empty() ? "python_node" : config_.process_type},
+        });
     node_process_->start(
         {python_bin, "-m", "recordlab_nodes.core.node_runtime",
          "--config", agents_config_path_, "--agent", config_.name},
-        nodes_root_, pythonpath);
+        nodes_root_, pythonpath,
+        {
+            .process = "node",
+            .agent_name = config_.name,
+            .node_name = config_.name,
+        },
+        process_output_callback_);
 }
 
 bool AgentProxy::ensureClient() {
