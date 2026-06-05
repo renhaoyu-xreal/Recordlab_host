@@ -50,17 +50,23 @@ bool canConnectTcp(const std::string& host, int port) {
 
 }  // namespace
 
-EchoActionClient::EchoActionClient(std::string host, int goal_port, int feedback_port, int timeout_ms)
-    : host_(std::move(host)), goal_port_(goal_port), feedback_port_(feedback_port), timeout_ms_(timeout_ms) {
+EchoActionClient::EchoActionClient(std::string host, int goal_port, int feedback_port, int timeout_ms,
+                                   std::string client_name)
+    : host_(std::move(host)),
+      client_name_(std::move(client_name)),
+      goal_port_(goal_port),
+      feedback_port_(feedback_port),
+      timeout_ms_(timeout_ms) {
     common::Logger::instance().log(
         common::LogLevel::Info,
         "EchoActionClient",
         "create fixed-port client host=" + host_ +
             ", goal_port=" + std::to_string(goal_port_) +
             ", feedback_port=" + std::to_string(feedback_port_) +
+            ", client_name=" + client_name_ +
             ", timeout_ms=" + std::to_string(timeout_ms_));
     client_ = std::make_unique<echo::ActionClient>(
-        "recordlab_python_action", host_, goal_port_, host_, feedback_port_, timeout_ms_);
+        client_name_, host_, goal_port_, host_, feedback_port_, timeout_ms_);
 }
 
 EchoActionClient::~EchoActionClient() = default;

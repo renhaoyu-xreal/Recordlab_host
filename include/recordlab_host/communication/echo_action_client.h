@@ -20,7 +20,8 @@ struct ActionResult {
 
 class EchoActionClient {
 public:
-    EchoActionClient(std::string host, int goal_port, int feedback_port, int timeout_ms = 3000);
+    EchoActionClient(std::string host, int goal_port, int feedback_port, int timeout_ms = 3000,
+                     std::string client_name = "recordlab_host_action_client");
     ~EchoActionClient();
 
     EchoActionClient(const EchoActionClient&) = delete;
@@ -32,6 +33,7 @@ public:
 private:
     std::unique_ptr<echo::ActionClient> client_;
     std::string host_;
+    std::string client_name_;
     int goal_port_;
     int feedback_port_;
     int timeout_ms_;

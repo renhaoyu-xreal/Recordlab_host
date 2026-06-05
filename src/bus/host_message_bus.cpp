@@ -1,26 +1,62 @@
 #include "recordlab_host/bus/host_message_bus.h"
 
 namespace recordlab::host {
+namespace {
+
+bool matchesPattern(const std::string& value, const std::string& pattern) {
+    if (pattern.empty() || pattern == "*") return true;
+    if (pattern.back() == '*') {
+        return value.rfind(pattern.substr(0, pattern.size() - 1), 0) == 0;
+    }
+    return value == pattern;
+}
+
+void pushMessage(std::map<std::string, std::deque<HostMessage>>& queues, HostMessage message) {
+    auto& queue = queues[message.target];
+    if (!message.coalesce_key.empty()) {
+        for (auto it = queue.begin(); it != queue.end();) {
+            if (it->coalesce_key == message.coalesce_key) {
+                it = queue.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    queue.push_back(std::move(message));
+}
+
+}  // namespace
 
 void HostMessageBus::registerConsumer(const std::string& target) {
     std::lock_guard<std::mutex> lock(mutex_);
     queues_.try_emplace(target);
 }
 
+void HostMessageBus::subscribe(const std::string& target,
+                               const std::string& type_pattern,
+                               const std::string& source_pattern) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    queues_.try_emplace(target);
+    subscriptions_.push_back({target, type_pattern, source_pattern});
+}
+
 void HostMessageBus::publish(HostMessage message) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto& queue = queues_[message.target];
-        if (!message.coalesce_key.empty()) {
-            for (auto it = queue.begin(); it != queue.end();) {
-                if (it->coalesce_key == message.coalesce_key) {
-                    it = queue.erase(it);
-                } else {
-                    ++it;
-                }
+        std::vector<std::string> subscription_targets;
+        for (const auto& sub : subscriptions_) {
+            if (sub.target != message.target
+                && matchesPattern(message.type, sub.type_pattern)
+                && matchesPattern(message.source, sub.source_pattern)) {
+                subscription_targets.push_back(sub.target);
             }
         }
-        queue.push_back(std::move(message));
+        for (const auto& target : subscription_targets) {
+            HostMessage copy = message;
+            copy.target = target;
+            pushMessage(queues_, std::move(copy));
+        }
+        pushMessage(queues_, std::move(message));
     }
     cv_.notify_all();
 }

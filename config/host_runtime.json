@@ -1,3 +1,11 @@
 {
-  "agents_config_path": "third_party/Recordlab_nodes/config/agents_config.json"
+  "agents_config_path": "third_party/Recordlab_nodes/config/agents_config.json",
+  "nodes_root": "third_party/Recordlab_nodes",
+  "echo_python_root": "third_party/echo_message_system/python",
+  "data_root": "third_party/Recordlab_nodes/data",
+  "logs_root": "logs",
+  "python_bin": "python3.10",
+  "node_runtime_module": "recordlab_nodes.core.node_runtime",
+  "data_registry_host": "127.0.0.1",
+  "data_registry_port": 16600
 }

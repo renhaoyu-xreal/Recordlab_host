@@ -30,6 +30,13 @@ std::string envOrDefault(const char* name, const fs::path& fallback) {
     return fallback.string();
 }
 
+std::string envOrDefault(const char* name, const char* fallback) {
+    if (const char* value = std::getenv(name)) {
+        return value;
+    }
+    return fallback;
+}
+
 int freePort() {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
@@ -83,6 +90,13 @@ int main() {
 
     std::ofstream cfg(config);
     cfg << R"({
+      "shared": {
+        "topic_sets": {
+          "imu_only": [
+            {"name": "imu_data", "encoding": "json"}
+          ]
+        }
+      },
       "agents": {
         "imu_proxy": {
           "name": "imu_proxy",
@@ -97,9 +111,7 @@ int main() {
           "init_device_params": {
             "read_path": ")" << csv.string() << R"("
           },
-          "topics": [
-            {"name": "imu_data", "encoding": "json"}
-          ],
+          "topics": "imu_only",
           "custom_params": {}
         }
       },
@@ -111,11 +123,15 @@ int main() {
     const std::string nodes_root = envOrDefault("RECORDLAB_NODES_ROOT", root / "third_party" / "Recordlab_nodes");
     const std::string echo_python_root = envOrDefault(
         "ECHO_MESSAGE_SYSTEM_PYTHON_ROOT", root / "third_party" / "echo_message_system" / "python");
+    const std::string python_bin = envOrDefault("RECORDLAB_PYTHON_BIN", "python3");
+    const std::string node_runtime_module = envOrDefault(
+        "RECORDLAB_NODE_RUNTIME_MODULE", "recordlab_nodes.core.node_runtime");
 
     recordlab::host::HostMessageBus bus;
     bus.registerConsumer(recordlab::host::msg::UI);
     bus.registerConsumer(recordlab::host::msg::WATCHDOG);
-    recordlab::host::AgentManager manager(bus, config.string(), nodes_root, echo_python_root);
+    recordlab::host::AgentManager manager(
+        bus, config.string(), nodes_root, echo_python_root, python_bin, node_runtime_module);
     manager.start();
 
     try {

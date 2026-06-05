@@ -3,19 +3,8 @@
 #include "recordlab_host/common/logger.h"
 
 #include <QDir>
-#include <QDialog>
-#include <QDialogButtonBox>
-#include <QFormLayout>
-#include <QAbstractItemView>
 #include <QFileInfo>
-#include <QInputDialog>
-#include <QLabel>
-#include <QLineEdit>
-#include <QListWidget>
-#include <QMessageBox>
 #include <QProcessEnvironment>
-#include <QComboBox>
-#include <QVBoxLayout>
 #include <QUuid>
 
 #include <exception>
@@ -78,11 +67,13 @@ QStringList jsonStringListValue(const nlohmann::json& object, const char* key) {
 
 ScriptsActuator::ScriptsActuator(HostMessageBus& bus, QString nodes_root,
                                  QString echo_python_root, QString agents_config_path,
+                                 QString python_bin,
                                  QObject* parent)
     : QObject(parent), bus_(bus),
       nodes_root_(std::move(nodes_root)),
       echo_python_root_(std::move(echo_python_root)),
-      agents_config_path_(std::move(agents_config_path)) {
+      agents_config_path_(std::move(agents_config_path)),
+      python_bin_(std::move(python_bin)) {
     bus_.registerConsumer(msg::SCRIPTS_ACTUATOR);
     poll_timer_ = new QTimer(this);
     poll_timer_->setInterval(50);
@@ -114,6 +105,10 @@ void ScriptsActuator::pollBus() {
             doRunScript(path, agent);
         } else if (m.type == msg::STOP_SCRIPT) {
             doStopScript();
+        } else if (m.type == msg::UI_DIALOG_RESPONSE) {
+            handleDialogResponse(m.payload);
+        } else if (m.type == msg::CMD_RESULT) {
+            handleCommandResult(m.payload);
         }
     }
 }
@@ -147,6 +142,9 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
     env.insert(QStringLiteral("RECORDLAB_AGENTS_CONFIG"), agents_config_path_);
     env.insert(QStringLiteral("RECORDLAB_NODES_ROOT"), nodes_root_);
     env.insert(QStringLiteral("ECHO_MESSAGE_SYSTEM_PYTHON_ROOT"), echo_python_root_);
+    env.insert(QStringLiteral("RECORDLAB_DATA_REGISTRY_HOST"), QString::fromLocal8Bit(qgetenv("RECORDLAB_DATA_REGISTRY_HOST")));
+    env.insert(QStringLiteral("RECORDLAB_DATA_REGISTRY_PORT"), QString::fromLocal8Bit(qgetenv("RECORDLAB_DATA_REGISTRY_PORT")));
+    env.insert(QStringLiteral("RECORDLAB_USE_HOST_BRIDGE"), QStringLiteral("1"));
     env.insert(QStringLiteral("PYTHONUNBUFFERED"), QStringLiteral("1"));
     const std::string all_log_path = common::Logger::instance().allLogPath();
     if (!all_log_path.empty()) {
@@ -231,7 +229,7 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
     });
 
     publishToUI(msg::LOG_ENTRY, {{"message", "运行脚本: " + resolved.toStdString()}});
-    const QString python_bin = env.value(QStringLiteral("RECORDLAB_PYTHON_BIN"), QStringLiteral("python3.10"));
+    const QString python_bin = env.value(QStringLiteral("RECORDLAB_PYTHON_BIN"), python_bin_);
     const QString runtime = QDir(nodes_root_).filePath(QStringLiteral("scripts/runtime/run_recordlab_script.py"));
     if (QFileInfo(runtime).exists()) {
         script_process_->start(python_bin, {
@@ -266,10 +264,10 @@ QString ScriptsActuator::resolveScriptPath(const QString& script_path) const {
     if (script_path.trimmed().isEmpty()) return {};
     const QFileInfo direct(script_path);
     if (direct.exists()) return direct.absoluteFilePath();
-    const QFileInfo in_legacy_scripts(QDir(nodes_root_).filePath(QStringLiteral("scripts/") + script_path));
-    if (in_legacy_scripts.exists()) return in_legacy_scripts.absoluteFilePath();
     const QFileInfo in_scripts(QDir(nodes_root_).filePath(QStringLiteral("node_scripts/") + script_path));
     if (in_scripts.exists()) return in_scripts.absoluteFilePath();
+    const QFileInfo in_legacy_scripts(QDir(nodes_root_).filePath(QStringLiteral("scripts/") + script_path));
+    if (in_legacy_scripts.exists()) return in_legacy_scripts.absoluteFilePath();
     return script_path;
 }
 
@@ -327,6 +325,8 @@ bool ScriptsActuator::handleRuntimeEvent(const QString& line) {
         const auto event = nlohmann::json::parse(line.mid(QString::fromUtf8(kPrefix).size()).toStdString());
         const auto type = event.value("type", std::string{});
         if (type == "dialog") handleDialogEvent(event);
+        if (type == "cmd_request") handleCommandRequestEvent(event);
+        if (type == "create_directory") handleCreateDirectoryEvent(event);
         if (type == "workflow") handleWorkflowEvent(event);
     } catch (const std::exception& e) {
         publishToUI(msg::LOG_ENTRY, {{"message", std::string("runtime 事件解析失败: ") + e.what()}});
@@ -337,118 +337,61 @@ bool ScriptsActuator::handleRuntimeEvent(const QString& line) {
 }
 
 void ScriptsActuator::handleDialogEvent(const nlohmann::json& event) {
-    const QString id = jsonStringValue(event, "id");
-    const QString kind = jsonStringValue(event, "kind", QStringLiteral("info"));
-    const QString title = jsonStringValue(event, "title", QStringLiteral("脚本提示"));
-    const QString message = jsonStringValue(event, "message");
-    nlohmann::json response = {{"id", id.toStdString()}, {"success", true}, {"cancelled", false}};
+    nlohmann::json payload = event;
+    payload["dialog_id"] = event.value("id", event.value("dialog_id", std::string{}));
+    bus_.publish({
+        .source = msg::SCRIPTS_ACTUATOR,
+        .target = msg::UI,
+        .type = msg::UI_DIALOG_REQUEST,
+        .payload = std::move(payload),
+    });
+}
 
-    if (kind == QStringLiteral("question")) {
-        response["response"] = QMessageBox::question(nullptr, title, message, QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::Yes;
-    } else if (kind == QStringLiteral("input")) {
-        bool ok = false;
-        const QString value = QInputDialog::getText(nullptr, title, message, QLineEdit::Normal,
-                                                    jsonStringValue(event, "default"), &ok);
-        response["cancelled"] = !ok;
-        response["response"] = value.toStdString();
-    } else if (kind == QStringLiteral("choice")) {
-        const QStringList items = jsonStringListValue(event, "items");
-        const bool multi_select = event.value("multi_select", false);
-        if (multi_select) {
-            QDialog dialog;
-            dialog.setWindowTitle(title);
-            dialog.resize(460, 360);
-            auto* layout = new QVBoxLayout(&dialog);
-            auto* label = new QLabel(message, &dialog);
-            label->setWordWrap(true);
-            layout->addWidget(label);
-            auto* list = new QListWidget(&dialog);
-            list->setSelectionMode(QAbstractItemView::MultiSelection);
-            list->addItems(items);
-            const QStringList defaults = jsonStringListValue(event, "default_selected");
-            for (int i = 0; i < list->count(); ++i) {
-                auto* item = list->item(i);
-                if (defaults.contains(item->text())) item->setSelected(true);
-            }
-            layout->addWidget(list, 1);
-            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-            layout->addWidget(buttons);
-            if (dialog.exec() == QDialog::Accepted) {
-                nlohmann::json selected = nlohmann::json::array();
-                for (auto* item : list->selectedItems()) selected.push_back(item->text().toStdString());
-                response["response"] = selected;
-            } else {
-                response["cancelled"] = true;
-            }
-        } else {
-            bool ok = false;
-            const QString selected = QInputDialog::getItem(nullptr, title, message, items, 0, false, &ok);
-            response["cancelled"] = !ok;
-            response["response"] = selected.toStdString();
-        }
-    } else if (kind == QStringLiteral("multi_field_input")) {
-        QDialog dialog;
-        dialog.setWindowTitle(title);
-        dialog.resize(520, 320);
-        auto* layout = new QVBoxLayout(&dialog);
-        auto* label = new QLabel(message, &dialog);
-        label->setWordWrap(true);
-        layout->addWidget(label);
-        auto* form = new QFormLayout();
-        struct Input { QString name; QLineEdit* edit = nullptr; QComboBox* combo = nullptr; };
-        std::vector<Input> inputs;
-        const auto fields_it = event.find("fields");
-        const nlohmann::json fields = (fields_it != event.end() && fields_it->is_array())
-            ? *fields_it
-            : nlohmann::json::array();
-        for (const auto& field : fields) {
-            if (!field.is_object()) continue;
-            const QString name = jsonStringValue(field, "name");
-            const QString field_label = jsonStringValue(field, "label", name);
-            QStringList choices;
-            const auto choices_it = field.find("choices");
-            const auto options_it = field.find("options");
-            const nlohmann::json raw_choices =
-                (choices_it != field.end() && choices_it->is_array()) ? *choices_it :
-                (options_it != field.end() && options_it->is_array()) ? *options_it :
-                nlohmann::json::array();
-            choices = jsonStringList(raw_choices);
-            if (!choices.isEmpty()) {
-                auto* combo = new QComboBox(&dialog);
-                combo->addItems(choices);
-                const int idx = combo->findText(jsonStringValue(field, "default"));
-                if (idx >= 0) combo->setCurrentIndex(idx);
-                form->addRow(field_label, combo);
-                inputs.push_back({name, nullptr, combo});
-            } else {
-                auto* edit = new QLineEdit(jsonStringValue(field, "default"), &dialog);
-                form->addRow(field_label, edit);
-                inputs.push_back({name, edit, nullptr});
-            }
-        }
-        layout->addLayout(form);
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-        layout->addWidget(buttons);
-        if (dialog.exec() == QDialog::Accepted) {
-            nlohmann::json values = nlohmann::json::object();
-            for (const auto& input : inputs) {
-                values[input.name.toStdString()] = input.combo ? input.combo->currentText().toStdString() : input.edit->text().toStdString();
-            }
-            response["response"] = values;
-        } else {
-            response["cancelled"] = true;
-        }
-    } else {
-        if (kind == QStringLiteral("error")) QMessageBox::critical(nullptr, title, message);
-        else if (kind == QStringLiteral("warning")) QMessageBox::warning(nullptr, title, message);
-        else QMessageBox::information(nullptr, title, message);
-        response["response"] = true;
+void ScriptsActuator::handleCommandRequestEvent(const nlohmann::json& event) {
+    const std::string request_id = event.value("id", event.value("request_id", std::string{}));
+    bus_.publish({
+        .request_id = request_id,
+        .source = msg::SCRIPTS_ACTUATOR,
+        .target = msg::AGENT_MANAGER,
+        .type = msg::CMD_REQUEST,
+        .payload = {
+            {"request_id", request_id},
+            {"agent_name", event.value("agent_name", current_agent_name_)},
+            {"cmd", event.value("cmd", std::string{})},
+            {"params", event.value("params", nlohmann::json::object())},
+            {"priority", event.value("priority", std::string("normal"))},
+            {"silent", event.value("silent", false)},
+        },
+    });
+}
+
+void ScriptsActuator::handleCreateDirectoryEvent(const nlohmann::json& event) {
+    const QString path = jsonStringValue(event, "path");
+    const bool ok = !path.trimmed().isEmpty() && QDir().mkpath(path);
+    sendRuntimeResponse({
+        {"id", event.value("id", event.value("request_id", std::string{}))},
+        {"success", ok},
+        {"cancelled", false},
+        {"response", path.toStdString()},
+    });
+}
+
+void ScriptsActuator::handleDialogResponse(const nlohmann::json& payload) {
+    nlohmann::json response = payload;
+    if (!response.contains("id")) {
+        response["id"] = response.value("dialog_id", std::string{});
     }
     sendRuntimeResponse(response);
+}
+
+void ScriptsActuator::handleCommandResult(const nlohmann::json& payload) {
+    sendRuntimeResponse({
+        {"id", payload.value("request_id", std::string{})},
+        {"request_id", payload.value("request_id", std::string{})},
+        {"success", payload.value("success", false)},
+        {"cancelled", false},
+        {"response", payload},
+    });
 }
 
 void ScriptsActuator::handleWorkflowEvent(const nlohmann::json& event) {

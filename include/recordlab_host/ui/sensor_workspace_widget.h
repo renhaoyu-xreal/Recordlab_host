@@ -34,6 +34,7 @@ public:
     QListWidget* customDataList() const;
     QPlainTextEdit* realtimeValueView() const;
     QLabel* motionStatusLabel() const;
+    void configureLayout(const nlohmann::json& sensor_layout);
     void handleRealtimeData(const QString& data_name, const nlohmann::json& value, double frequency);
 
 private:
@@ -70,6 +71,10 @@ private:
     std::map<QString, QString> realtime_value_lines_;
     QTimer* curve_refresh_timer_ = nullptr;
     bool curve_dirty_ = false;
+    nlohmann::json sensor_layout_ = nlohmann::json::object();
+    std::map<QString, QString> stream_label_by_key_;
+    std::map<QString, QString> label_key_by_label_;
+    std::map<QString, int> list_row_by_label_;
 };
 
 }  // namespace recordlab::host::ui

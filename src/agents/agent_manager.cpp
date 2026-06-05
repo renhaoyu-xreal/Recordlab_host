@@ -18,27 +18,17 @@ std::string describeTopics(const std::vector<TopicConfig>& topics, int data_port
     return oss.str();
 }
 
-int commandTimeoutMs(const std::string& cmd) {
-    if (cmd == "start_device") {
-        return 90000;
-    }
-    if (cmd == "init_device") {
-        return 30000;
-    }
-    if (cmd == "release_device" || cmd == "stop_device" || cmd == "estop") {
-        return 10000;
-    }
-    return 5000;
-}
-
 }  // namespace
 
 AgentManager::AgentManager(HostMessageBus& bus, std::string agents_config_path,
-                           std::string nodes_root, std::string echo_python_root)
+                           std::string nodes_root, std::string echo_python_root,
+                           std::string python_bin, std::string node_runtime_module)
     : bus_(bus),
       agents_config_path_(std::move(agents_config_path)),
       nodes_root_(std::move(nodes_root)),
-      echo_python_root_(std::move(echo_python_root)) {
+      echo_python_root_(std::move(echo_python_root)),
+      python_bin_(std::move(python_bin)),
+      node_runtime_module_(std::move(node_runtime_module)) {
     bus_.registerConsumer(msg::AGENT_MANAGER);
 }
 
@@ -203,7 +193,7 @@ void AgentManager::doCmdRequest(const std::string& agent_name, const std::string
             {"agent_name", target_agent},
             {"cmd", cmd},
         });
-        const auto result = agent->cmd(cmd, params, commandTimeoutMs(cmd));
+        const auto result = agent->cmd(cmd, params, agent->config().commandTimeoutMs(cmd));
         const auto message = result.result.value("message", result.result.dump());
         common::Logger::instance().log(
             result.success ? common::LogLevel::Info : common::LogLevel::Warn,
@@ -274,6 +264,8 @@ AgentProxy& AgentManager::getOrCreateAgent(const AgentConfig& config) {
                 agents_config_path_,
                 nodes_root_,
                 echo_python_root_,
+                python_bin_,
+                node_runtime_module_,
                 [this](nlohmann::json payload) {
                     bus_.publish({
                         .source = msg::AGENT_MANAGER,

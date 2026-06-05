@@ -20,7 +20,7 @@ class ScriptsActuator : public QObject {
 public:
     ScriptsActuator(HostMessageBus& bus, QString nodes_root,
                     QString echo_python_root, QString agents_config_path,
-                    QObject* parent = nullptr);
+                    QString python_bin, QObject* parent = nullptr);
     ~ScriptsActuator() override;
 
     ScriptsActuator(const ScriptsActuator&) = delete;
@@ -35,6 +35,10 @@ private:
     void processOutputLine(const QString& line, const std::string& stream);
     bool handleRuntimeEvent(const QString& line);
     void handleDialogEvent(const nlohmann::json& event);
+    void handleCommandRequestEvent(const nlohmann::json& event);
+    void handleCreateDirectoryEvent(const nlohmann::json& event);
+    void handleDialogResponse(const nlohmann::json& payload);
+    void handleCommandResult(const nlohmann::json& payload);
     void handleWorkflowEvent(const nlohmann::json& event);
     void sendRuntimeResponse(const nlohmann::json& response);
     void publishToUI(const std::string& type, nlohmann::json payload);
@@ -44,6 +48,7 @@ private:
     QString nodes_root_;
     QString echo_python_root_;
     QString agents_config_path_;
+    QString python_bin_;
     std::unique_ptr<QProcess> script_process_;
     QString current_agent_;
     bool stop_requested_ = false;

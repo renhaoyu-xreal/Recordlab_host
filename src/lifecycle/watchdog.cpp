@@ -337,8 +337,8 @@ void Watchdog::publishErrorNotification() {
         .type = msg::USER_NOTIFICATION,
         .payload = {
             {"severity", "critical"},
-            {"title", "眼镜状态异常"},
-            {"message", "眼镜可能已经过热，或在软件启动前已经处于运行状态，软件无法读取固件FSN、完成启动配置。\n\n请拔出眼镜，等待 Watchdog 状态进入 DISCONNECTED 后，再重新插上眼镜。"},
+            {"error_code", "INIT_DEVICE_FAILED"},
+            {"params", nlohmann::json::object()},
             {"agent_name", activeAgent()},
             {"state", "ERROR"},
             {"reason", last_reason_},

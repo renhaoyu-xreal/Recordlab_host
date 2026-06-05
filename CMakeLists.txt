@@ -26,8 +26,11 @@ endif()
 
 add_library(recordlab_host
   include/recordlab_host/common/logger.h
+  include/recordlab_host/common/runtime_config.h
   include/recordlab_host/agents/agent_proxy.h
   include/recordlab_host/data/camera_shared_memory.h
+  include/recordlab_host/data/data_registry_server.h
+  include/recordlab_host/data/topic_parser.h
   include/recordlab_host/scripts/scripts_actuator.h
   include/recordlab_host/lifecycle/agent_health_state.h
   include/recordlab_host/lifecycle/watchdog.h
@@ -53,8 +56,11 @@ add_library(recordlab_host
   src/communication/echo_topic_subscriber.cpp
   src/common/logger.cpp
   src/common/process_handle.cpp
+  src/common/runtime_config.cpp
   src/data/camera_shared_memory.cpp
+  src/data/data_registry_server.cpp
   src/data/sensor_queue.cpp
+  src/data/topic_parser.cpp
   src/lifecycle/watchdog.cpp
   src/data/data_receiver.cpp
   src/scripts/scripts_actuator.cpp
@@ -92,11 +98,13 @@ foreach(test_name
   test_agent_config_loader
   test_agent_manager_proxy_integration
   test_data_receiver_streams
+  test_data_registry_server
   test_echo_topic_encoding
   test_host_message_bus
   test_logger_context
   test_process_handle
   test_scripts_actuator_lifecycle
+  test_sensor_queue
   test_watchdog_lifecycle
   test_echo_python_integration
   test_ui_layout_contract

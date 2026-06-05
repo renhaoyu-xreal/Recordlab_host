@@ -82,6 +82,24 @@ int main() {
         assert(messages.size() == 1);
         assert(messages.front().payload["seq"] == 19);
     }
+    {
+        recordlab::host::HostMessageBus bus;
+        bus.registerConsumer("ui");
+        bus.subscribe("registry_observer", "data.*", "data_registry");
+        bus.publish(recordlab::host::HostMessage{
+            "",
+            "data_registry",
+            "ui",
+            "data.registered",
+            {{"topic_name", "imu_data"}},
+        });
+        auto ui_message = bus.waitFor("ui", 100);
+        auto observed = bus.waitFor("registry_observer", 100);
+        assert(ui_message.has_value());
+        assert(observed.has_value());
+        assert(observed->type == "data.registered");
+        assert(observed->payload["topic_name"] == "imu_data");
+    }
     std::cout << "host message bus ok\n";
     return 0;
 }

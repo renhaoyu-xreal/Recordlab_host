@@ -31,6 +31,13 @@ std::string envOrDefault(const char* name, const fs::path& fallback) {
     return fallback.string();
 }
 
+std::string envOrDefault(const char* name, const char* fallback) {
+    if (const char* value = std::getenv(name)) {
+        return value;
+    }
+    return fallback;
+}
+
 int freePort() {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
@@ -72,6 +79,16 @@ int main() {
 
     std::ofstream cfg(config);
     cfg << R"({
+      "shared": {
+        "topic_sets": {
+          "standard_sensor_topics": [
+            {"name": "imu_data", "encoding": "json"},
+            {"name": "record_timer", "encoding": "json"},
+            {"name": "time_delay", "encoding": "json"},
+            {"name": "motion_status", "encoding": "json"}
+          ]
+        }
+      },
       "agents": {
         "imu_cpp": {
           "name": "imu_cpp",
@@ -83,12 +100,7 @@ int main() {
           "feedback_port": )" << feedback_port << R"(,
           "data_port": )" << data_port << R"(,
           "root_path": ")" << data_root.string() << R"(",
-          "topics": [
-            {"name": "imu_data", "encoding": "json"},
-            {"name": "record_timer", "encoding": "json"},
-            {"name": "time_delay", "encoding": "json"},
-            {"name": "motion_status", "encoding": "json"}
-          ],
+          "topics": "standard_sensor_topics",
           "custom_params": {}
         }
       },
@@ -100,9 +112,11 @@ int main() {
     const fs::path root = hostRoot();
     const std::string nodes_root = envOrDefault("RECORDLAB_NODES_ROOT", root / "third_party" / "Recordlab_nodes");
     const std::string echo_python_root = envOrDefault("ECHO_MESSAGE_SYSTEM_PYTHON_ROOT", root / "third_party" / "echo_message_system" / "python");
-    const std::string python_bin = envOrDefault("RECORDLAB_PYTHON_BIN", "python3.10");
+    const std::string python_bin = envOrDefault("RECORDLAB_PYTHON_BIN", "python3");
+    const std::string node_runtime_module = envOrDefault(
+        "RECORDLAB_NODE_RUNTIME_MODULE", "recordlab_nodes.core.node_runtime");
     const std::string py_path = nodes_root + ":" + echo_python_root;
-    node.start({python_bin, "-m", "recordlab_nodes.core.node_runtime", "--config", config.string(), "--agent", "imu_cpp"},
+    node.start({python_bin, "-m", node_runtime_module, "--config", config.string(), "--agent", "imu_cpp"},
                nodes_root,
                py_path);
 

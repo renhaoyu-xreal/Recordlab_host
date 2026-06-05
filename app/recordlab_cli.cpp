@@ -1,21 +1,12 @@
 #include "recordlab_host/agents/agent_config_loader.h"
+#include "recordlab_host/common/runtime_config.h"
 
-#include <filesystem>
 #include <iostream>
 
-namespace {
-
-std::string defaultAgentsConfig(char** argv) {
-    namespace fs = std::filesystem;
-    fs::path bin_path = fs::absolute(argv[0]).parent_path();
-    fs::path host_root = bin_path.filename() == "build" ? bin_path.parent_path() : bin_path;
-    return (host_root / "third_party" / "Recordlab_nodes" / "config" / "agents_config.json").string();
-}
-
-}  // namespace
-
 int main(int argc, char** argv) {
-    const std::string config = argc > 1 ? argv[1] : defaultAgentsConfig(argv);
+    const auto runtime = recordlab::host::RuntimeConfigLoader::load(
+        argv[0], argc > 1 ? argv[1] : std::string{});
+    const std::string config = runtime.agents_config_path;
     recordlab::host::AgentConfigLoader loader(config);
     for (const auto& name : loader.loadPrimaryAgents()) {
         auto agent = loader.loadAgent(name);

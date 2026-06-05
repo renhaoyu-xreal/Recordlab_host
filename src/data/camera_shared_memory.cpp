@@ -19,6 +19,8 @@ constexpr int kMetaSize = 64;
 constexpr int kSlotSize = 4 * 1024 * 1024;
 constexpr std::size_t kSeqSize = kCameraCount * kSlotCount * sizeof(std::uint64_t);
 constexpr std::size_t kTotalSize = kSeqSize + kCameraCount * kSlotCount * kSlotSize;
+constexpr std::uint32_t kHeaderMagic = 0x52434d48;  // RCMH
+constexpr int kHeaderSize = 64;
 
 std::string normalizeName(const std::string& name) {
     if (name.empty()) {
@@ -59,23 +61,34 @@ bool CameraSharedMemoryReader::attach(const std::string& shm_name) {
 
     struct stat st {};
     if (::fstat(fd_, &st) != 0 || st.st_size < static_cast<off_t>(kTotalSize)) {
-        common::Logger::instance().log(
-            common::LogLevel::Warn,
-            "CameraSharedMemoryReader",
-            "invalid shared memory size for " + normalized);
-        detach();
-        return false;
+        if (::fstat(fd_, &st) != 0 || st.st_size < static_cast<off_t>(kHeaderSize)) {
+            common::Logger::instance().log(
+                common::LogLevel::Warn,
+                "CameraSharedMemoryReader",
+                "invalid shared memory size for " + normalized);
+            detach();
+            return false;
+        }
     }
 
-    void* mapped = ::mmap(nullptr, kTotalSize, PROT_READ, MAP_SHARED, fd_, 0);
+    const std::size_t map_size = static_cast<std::size_t>(st.st_size);
+    void* mapped = ::mmap(nullptr, map_size, PROT_READ, MAP_SHARED, fd_, 0);
     if (mapped == MAP_FAILED) {
         detach();
         return false;
     }
 
     mapping_ = static_cast<const char*>(mapped);
-    mapping_size_ = kTotalSize;
+    mapping_size_ = map_size;
     shm_name_ = normalized;
+    if (!loadLayout()) {
+        common::Logger::instance().log(
+            common::LogLevel::Warn,
+            "CameraSharedMemoryReader",
+            "invalid shared memory layout for " + normalized);
+        detach();
+        return false;
+    }
     common::Logger::instance().log(
         common::LogLevel::Info,
         "CameraSharedMemoryReader",
@@ -94,23 +107,55 @@ void CameraSharedMemoryReader::detach() {
     }
     fd_ = -1;
     shm_name_.clear();
+    camera_count_ = kCameraCount;
+    slot_count_ = kSlotCount;
+    meta_size_ = kMetaSize;
+    slot_size_ = kSlotSize;
+    seq_offset_ = 0;
+    slots_offset_ = kSeqSize;
+}
+
+bool CameraSharedMemoryReader::loadLayout() {
+    if (!mapping_ || mapping_size_ < kHeaderSize) {
+        return false;
+    }
+    if (readU32(mapping_) == kHeaderMagic) {
+        const int version = static_cast<int>(readU32(mapping_ + 4));
+        camera_count_ = static_cast<int>(readU32(mapping_ + 8));
+        slot_count_ = static_cast<int>(readU32(mapping_ + 12));
+        slot_size_ = static_cast<int>(readU32(mapping_ + 16));
+        meta_size_ = static_cast<int>(readU32(mapping_ + 20));
+        seq_offset_ = kHeaderSize;
+        slots_offset_ = seq_offset_ + static_cast<std::size_t>(camera_count_) * slot_count_ * sizeof(std::uint64_t);
+        const std::size_t required = slots_offset_
+            + static_cast<std::size_t>(camera_count_) * slot_count_ * static_cast<std::size_t>(slot_size_);
+        return version >= 1 && camera_count_ > 0 && slot_count_ > 0 && slot_size_ > meta_size_
+            && meta_size_ >= 24 && required <= mapping_size_;
+    }
+    camera_count_ = kCameraCount;
+    slot_count_ = kSlotCount;
+    meta_size_ = kMetaSize;
+    slot_size_ = kSlotSize;
+    seq_offset_ = 0;
+    slots_offset_ = kSeqSize;
+    return mapping_size_ >= kTotalSize;
 }
 
 bool CameraSharedMemoryReader::readLatestFrame(const std::string& shm_name,
                                                int camera_index,
                                                std::uint64_t& last_seq,
                                                CameraSharedFrame& frame) {
-    if (camera_index < 0 || camera_index >= kCameraCount) {
+    if (!attach(shm_name)) {
         return false;
     }
-    if (!attach(shm_name)) {
+    if (camera_index < 0 || camera_index >= camera_count_) {
         return false;
     }
 
     int latest_slot = -1;
     std::uint64_t latest_seq = last_seq;
-    const std::size_t seq_base = static_cast<std::size_t>(camera_index) * kSlotCount * sizeof(std::uint64_t);
-    for (int slot = 0; slot < kSlotCount; ++slot) {
+    const std::size_t seq_base = seq_offset_ + static_cast<std::size_t>(camera_index) * slot_count_ * sizeof(std::uint64_t);
+    for (int slot = 0; slot < slot_count_; ++slot) {
         const auto seq = readU64(mapping_ + seq_base + static_cast<std::size_t>(slot) * sizeof(std::uint64_t));
         if (seq > latest_seq) {
             latest_seq = seq;
@@ -121,9 +166,9 @@ bool CameraSharedMemoryReader::readLatestFrame(const std::string& shm_name,
         return false;
     }
 
-    const std::size_t slot_offset = kSeqSize
-        + (static_cast<std::size_t>(camera_index) * kSlotCount + static_cast<std::size_t>(latest_slot)) * kSlotSize;
-    if (slot_offset + kMetaSize > mapping_size_) {
+    const std::size_t slot_offset = slots_offset_
+        + (static_cast<std::size_t>(camera_index) * slot_count_ + static_cast<std::size_t>(latest_slot)) * static_cast<std::size_t>(slot_size_);
+    if (slot_offset + static_cast<std::size_t>(meta_size_) > mapping_size_) {
         return false;
     }
     const char* slot_base = mapping_ + slot_offset;
@@ -139,14 +184,14 @@ bool CameraSharedMemoryReader::readLatestFrame(const std::string& shm_name,
     if (candidate.width <= 0 || candidate.height <= 0 || candidate.data_size <= 0 || candidate.bytes_per_line <= 0) {
         return false;
     }
-    if (kMetaSize + candidate.data_size > kSlotSize) {
+    if (static_cast<std::size_t>(meta_size_) + candidate.data_size > static_cast<std::size_t>(slot_size_)) {
         return false;
     }
-    if (slot_offset + kMetaSize + static_cast<std::size_t>(candidate.data_size) > mapping_size_) {
+    if (slot_offset + static_cast<std::size_t>(meta_size_) + static_cast<std::size_t>(candidate.data_size) > mapping_size_) {
         return false;
     }
 
-    candidate.data = QByteArray(slot_base + kMetaSize, candidate.data_size);
+    candidate.data = QByteArray(slot_base + meta_size_, candidate.data_size);
 
     const auto verify_seq = readU64(mapping_ + seq_base + static_cast<std::size_t>(latest_slot) * sizeof(std::uint64_t));
     if (verify_seq != latest_seq) {

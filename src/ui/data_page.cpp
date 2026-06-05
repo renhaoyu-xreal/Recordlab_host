@@ -10,6 +10,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSplitter>
+#include <QStringList>
 #include <QVBoxLayout>
 
 namespace recordlab::host::ui {
@@ -91,13 +92,16 @@ DataPage::DataPage(QWidget* parent) : QWidget(parent) {
 
     right_layout->addWidget(command_group, 2);
 
-    auto* status_group = new QGroupBox(QStringLiteral("当前状态"), right_pane);
-    auto* status_layout = new QVBoxLayout(status_group);
-    status_layout->addWidget(new QLabel(QStringLiteral("当前 Agent"), status_group));
-    status_layout->addWidget(new QLabel(QStringLiteral("未选择"), status_group));
-    status_layout->addWidget(new QLabel(QStringLiteral("当前设备"), status_group));
-    status_layout->addWidget(new QLabel(QStringLiteral("--"), status_group));
-    right_layout->addWidget(status_group, 1);
+    auto* cookie_group = new QGroupBox(QStringLiteral("节点上报信息"), right_pane);
+    auto* cookie_layout = new QVBoxLayout(cookie_group);
+    cookie_view_ = new QPlainTextEdit(cookie_group);
+    cookie_view_->setObjectName(QStringLiteral("node_cookie_view"));
+    cookie_view_->setReadOnly(true);
+    cookie_view_->setMaximumBlockCount(200);
+    cookie_view_->setPlainText(QStringLiteral("--"));
+    cookie_view_->setStyleSheet(QStringLiteral("QPlainTextEdit { background-color: #f7fbff; border: 1px solid #8aa6c1; padding: 6px; }"));
+    cookie_layout->addWidget(cookie_view_);
+    right_layout->addWidget(cookie_group, 1);
     right_layout->addStretch(1);
 
     top_splitter->addWidget(right_pane);
@@ -124,7 +128,7 @@ DataPage::DataPage(QWidget* parent) : QWidget(parent) {
     auto* data_group = new QGroupBox(QStringLiteral("data输出目录"), bottom_splitter);
     data_group->setObjectName(QStringLiteral("command_data_output_group"));
     auto* data_layout = new QVBoxLayout(data_group);
-    auto* data_output = new DataOutputDirectoryWidget(QStringLiteral("third_party/Recordlab_nodes/data"), data_group);
+    auto* data_output = new DataOutputDirectoryWidget(QStringLiteral("data"), data_group);
     data_output->setObjectName(QStringLiteral("command_data_output_widget"));
     data_group->setTitle(data_output->titleText());
     connect(data_output, &DataOutputDirectoryWidget::messageReady, this, [this](const QString& message) {
@@ -163,6 +167,56 @@ void DataPage::setDataRoot(const QString& data_root) {
     if (auto* widget = findChild<DataOutputDirectoryWidget*>(QStringLiteral("command_data_output_widget"))) {
         widget->setRootPath(data_root);
     }
+}
+
+void DataPage::setCommands(const std::vector<std::string>& commands) {
+    if (!command_combo_box_ || commands.empty()) {
+        return;
+    }
+    const QString current = command_combo_box_->currentText();
+    command_combo_box_->clear();
+    for (const auto& command : commands) {
+        command_combo_box_->addItem(QString::fromStdString(command));
+    }
+    if (!current.trimmed().isEmpty()) {
+        command_combo_box_->setCurrentText(current);
+    }
+}
+
+void DataPage::setCookies(const nlohmann::json& cookies) {
+    if (!cookie_view_) {
+        return;
+    }
+    const nlohmann::json items = cookies.is_object()
+        ? cookies.value("cookies", nlohmann::json::array())
+        : cookies;
+    QStringList lines;
+    if (items.is_array()) {
+        for (const auto& item : items) {
+            if (!item.is_object()) {
+                continue;
+            }
+            const bool display = item.value("is_display", item.value("isDisplay", false));
+            if (!display) {
+                continue;
+            }
+            const QString key = QString::fromStdString(item.value("key", std::string{}));
+            if (key.trimmed().isEmpty()) {
+                continue;
+            }
+            const auto value_it = item.find("value");
+            QString value_text;
+            if (value_it == item.end() || value_it->is_null()) {
+                value_text = QStringLiteral("--");
+            } else if (value_it->is_string()) {
+                value_text = QString::fromStdString(value_it->get<std::string>());
+            } else {
+                value_text = QString::fromStdString(value_it->dump());
+            }
+            lines << QStringLiteral("%1: %2").arg(key, value_text);
+        }
+    }
+    cookie_view_->setPlainText(lines.isEmpty() ? QStringLiteral("--") : lines.join(QStringLiteral("\n")));
 }
 
 }  // namespace recordlab::host::ui

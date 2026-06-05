@@ -80,19 +80,6 @@ bool isTemperatureType(int type) {
     return type == 12 || type == 13;
 }
 
-const std::array<QString, 7>& imuRealtimeLabels() {
-    static const std::array<QString, 7> labels = {
-        QStringLiteral("IMU0-gyro"),
-        QStringLiteral("IMU0-acc"),
-        QStringLiteral("IMU0-mag"),
-        QStringLiteral("IMU0-temperature"),
-        QStringLiteral("IMU1-gyro"),
-        QStringLiteral("IMU1-acc"),
-        QStringLiteral("IMU1-temperature"),
-    };
-    return labels;
-}
-
 QString frequencyText(double frequency) {
     if (frequency <= 0.0) {
         return QStringLiteral("--Hz");
@@ -369,11 +356,49 @@ QLabel* SensorWorkspaceWidget::motionStatusLabel() const {
     return motion_status_label_;
 }
 
+void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout) {
+    sensor_layout_ = sensor_layout.is_object() ? sensor_layout : nlohmann::json::object();
+    stream_label_by_key_.clear();
+    label_key_by_label_.clear();
+    list_row_by_label_.clear();
+    if (!data_selection_list_ || !custom_data_list_ || sensor_layout_.empty()) {
+        return;
+    }
+    data_selection_list_->clear();
+    custom_data_list_->clear();
+    const auto addItem = [&](QListWidget* list, const QString& label, const QString& stream_key) {
+        const int row = list->count();
+        list->addItem(QStringLiteral("%1 [--Hz]").arg(label));
+        list_row_by_label_[label] = row;
+        label_key_by_label_[label] = stream_key;
+        stream_label_by_key_[stream_key] = label;
+    };
+    const auto imu = sensor_layout_.find("imu_data");
+    if (imu != sensor_layout_.end() && imu->is_object()) {
+        for (const auto& channel : imu->value("channels", nlohmann::json::array())) {
+            if (!channel.is_object()) continue;
+            const int type = channel.value("type", 0);
+            const QString label = QString::fromStdString(channel.value("label", std::string("imu_data")));
+            addItem(data_selection_list_, label, QStringLiteral("imu_data:%1").arg(type));
+        }
+    }
+    for (const auto& [topic, layout] : sensor_layout_.items()) {
+        if (topic == "imu_data" || !layout.is_object()) continue;
+        const QString label = QString::fromStdString(layout.value("display_name", topic));
+        addItem(custom_data_list_, label, QString::fromStdString(topic));
+    }
+    renderRealtimeValues();
+}
+
 void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const nlohmann::json& value, double frequency) {
     updateFrequencyLabels(data_name, value, frequency);
     if (data_name == QStringLiteral("imu_data") && value.is_object()) {
         const int type = value.value("type", 0);
-        const QString label = imuLabelForType(type);
+        const QString stream_key = QStringLiteral("imu_data:%1").arg(type);
+        const auto configured_label = stream_label_by_key_.find(stream_key);
+        const QString label = configured_label == stream_label_by_key_.end()
+            ? imuLabelForType(type)
+            : configured_label->second;
         appendCurveSample(label, value);
         QString value_text = QStringLiteral("type:%1 ").arg(type);
         if (value.contains("data") && value["data"].is_array() && !value["data"].empty()) {
@@ -439,15 +464,6 @@ QWidget* SensorWorkspaceWidget::buildLeftPanel() {
     data_selection_list_ = new QListWidget(data_group);
     data_selection_list_->setObjectName(QStringLiteral("data_selection_list"));
     data_selection_list_->setStyleSheet(listStyle(QStringLiteral("#fff7d8"), QStringLiteral("#a59470")));
-    data_selection_list_->addItems({
-        QStringLiteral("IMU0-gyro [--Hz]"),
-        QStringLiteral("IMU0-acc [--Hz]"),
-        QStringLiteral("IMU0-mag [--Hz]"),
-        QStringLiteral("IMU0-temperature [--Hz]"),
-        QStringLiteral("IMU1-gyro [--Hz]"),
-        QStringLiteral("IMU1-acc [--Hz]"),
-        QStringLiteral("IMU1-temperature [--Hz]"),
-    });
     connect(data_selection_list_, &QListWidget::currentItemChanged, this,
             [this](QListWidgetItem* current, QListWidgetItem*) {
                 try {
@@ -464,10 +480,6 @@ QWidget* SensorWorkspaceWidget::buildLeftPanel() {
     custom_data_list_ = new QListWidget(custom_group);
     custom_data_list_->setObjectName(QStringLiteral("custom_data_list"));
     custom_data_list_->setStyleSheet(listStyle(QStringLiteral("#eef9ea"), QStringLiteral("#90a78c")));
-    custom_data_list_->addItems({
-        QStringLiteral("motion_status [--Hz]"),
-        QStringLiteral("camera_data [--Hz]"),
-    });
     connect(custom_data_list_, &QListWidget::currentItemChanged, this,
             [this](QListWidgetItem* current, QListWidgetItem*) {
                 try {
@@ -543,16 +555,19 @@ QWidget* SensorWorkspaceWidget::buildVideoPlaceholder(const QString& title, QLab
     )"));
     auto* layout = new QVBoxLayout(frame);
     layout->setContentsMargins(6, 6, 6, 6);
-    layout->setSpacing(0);
+    layout->setSpacing(5);
     image_label = new QLabel(title, frame);
-    image_label->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    image_label->setAlignment(Qt::AlignCenter);
     image_label->setMinimumSize(220, 120);
     image_label->setStyleSheet(QStringLiteral(
-        "QLabel { background-color: #101214; color: rgba(255,255,255,0.55); border: 1px solid #2c3135;"
-        " font-size: 18px; font-weight: 600; padding: 10px 14px; }"));
+        "QLabel { background-color: #101214; color: #e9edf0; border: 1px solid #2c3135; font-size: 16px; font-weight: 600; }"));
     layout->addWidget(image_label, 1);
-    status_label = new QLabel(frame);
-    status_label->setVisible(false);
+    status_label = new QLabel(QStringLiteral("%1 | 等待图像流 | -- x --").arg(title), frame);
+    status_label->setAlignment(Qt::AlignCenter);
+    status_label->setMinimumHeight(24);
+    status_label->setStyleSheet(QStringLiteral(
+        "QLabel { background-color: #fffdf2; color: #504a40; border: 1px solid #c9c0ae; padding: 3px 6px; font-family: monospace; }"));
+    layout->addWidget(status_label);
     return frame;
 }
 
@@ -560,58 +575,42 @@ void SensorWorkspaceWidget::updateFrequencyLabels(const QString& data_name, cons
     if (value.is_object()) {
         const auto frequencies = value.find("_stream_frequencies_hz");
         if (frequencies != value.end() && frequencies->is_object()) {
-            const auto updateFromMap = [frequencies](QListWidget* list, int row, const QString& label,
-                                                     const char* key) {
-                const auto it = frequencies->find(key);
-                if (it != frequencies->end() && it->is_number()) {
-                    setListItemText(list, row, label, it->get<double>());
-                    return true;
+            if (!stream_label_by_key_.empty()) {
+                for (const auto& [key, frequency_value] : frequencies->items()) {
+                    if (!frequency_value.is_number()) continue;
+                    const QString stream_key = QString::fromStdString(key);
+                    const auto label_it = stream_label_by_key_.find(stream_key);
+                    if (label_it == stream_label_by_key_.end()) continue;
+                    const auto row_it = list_row_by_label_.find(label_it->second);
+                    if (row_it == list_row_by_label_.end()) continue;
+                    QListWidget* list = stream_key.startsWith(QStringLiteral("imu_data:"))
+                        ? data_selection_list_
+                        : custom_data_list_;
+                    setListItemText(list, row_it->second, label_it->second, frequency_value.get<double>());
                 }
-                return false;
-            };
-            const bool updated_any =
-                updateFromMap(data_selection_list_, 0, QStringLiteral("IMU0-gyro"), "imu_data:1")
-                | updateFromMap(data_selection_list_, 1, QStringLiteral("IMU0-acc"), "imu_data:2")
-                | updateFromMap(data_selection_list_, 2, QStringLiteral("IMU0-mag"), "imu_data:3")
-                | updateFromMap(data_selection_list_, 3, QStringLiteral("IMU0-temperature"), "imu_data:12")
-                | updateFromMap(data_selection_list_, 4, QStringLiteral("IMU1-gyro"), "imu_data:4")
-                | updateFromMap(data_selection_list_, 5, QStringLiteral("IMU1-acc"), "imu_data:5")
-                | updateFromMap(data_selection_list_, 6, QStringLiteral("IMU1-temperature"), "imu_data:13")
-                | updateFromMap(custom_data_list_, 0, QStringLiteral("motion_status"), "motion_status")
-                | updateFromMap(custom_data_list_, 1, QStringLiteral("camera_data"), "camera_data");
-            const bool current_imu_has_frequency =
-                data_name != QStringLiteral("imu_data") ||
-                [&]() {
-                    const int type = value.value("type", 0);
-                    const std::string key = "imu_data:" + std::to_string(type);
-                    const auto it = frequencies->find(key);
-                    return it != frequencies->end() && it->is_number();
-                }();
-            if (updated_any && current_imu_has_frequency) {
-                return;
+                if (data_name != QStringLiteral("imu_data")) {
+                    return;
+                }
             }
         }
     }
 
+    QString stream_key = data_name;
     if (data_name == QStringLiteral("imu_data") && value.is_object()) {
-        const int type = value.value("type", 0);
-        switch (type) {
-        case 1: setListItemText(data_selection_list_, 0, QStringLiteral("IMU0-gyro"), frequency); break;
-        case 2: setListItemText(data_selection_list_, 1, QStringLiteral("IMU0-acc"), frequency); break;
-        case 3: setListItemText(data_selection_list_, 2, QStringLiteral("IMU0-mag"), frequency); break;
-        case 12: setListItemText(data_selection_list_, 3, QStringLiteral("IMU0-temperature"), frequency); break;
-        case 4: setListItemText(data_selection_list_, 4, QStringLiteral("IMU1-gyro"), frequency); break;
-        case 5: setListItemText(data_selection_list_, 5, QStringLiteral("IMU1-acc"), frequency); break;
-        case 13: setListItemText(data_selection_list_, 6, QStringLiteral("IMU1-temperature"), frequency); break;
-        default: break;
-        }
+        stream_key = QStringLiteral("imu_data:%1").arg(value.value("type", 0));
+    }
+    const auto label_it = stream_label_by_key_.find(stream_key);
+    if (label_it == stream_label_by_key_.end()) {
         return;
     }
-    if (data_name == QStringLiteral("motion_status")) {
-        setListItemText(custom_data_list_, 0, QStringLiteral("motion_status"), frequency);
-    } else if (data_name == QStringLiteral("camera_data")) {
-        setListItemText(custom_data_list_, 1, QStringLiteral("camera_data"), frequency);
+    const auto row_it = list_row_by_label_.find(label_it->second);
+    if (row_it == list_row_by_label_.end()) {
+        return;
     }
+    QListWidget* list = stream_key.startsWith(QStringLiteral("imu_data:"))
+        ? data_selection_list_
+        : custom_data_list_;
+    setListItemText(list, row_it->second, label_it->second, frequency);
 }
 
 void SensorWorkspaceWidget::updateSelectedDataFromItem(QListWidgetItem* item) {
@@ -668,7 +667,13 @@ void SensorWorkspaceWidget::renderRealtimeValues() {
         return;
     }
     QStringList lines;
-    for (const auto& label : imuRealtimeLabels()) {
+    QStringList labels;
+    if (data_selection_list_ && data_selection_list_->count() > 0) {
+        for (int row = 0; row < data_selection_list_->count(); ++row) {
+            labels << dataNameFromListText(data_selection_list_->item(row)->text());
+        }
+    }
+    for (const auto& label : labels) {
         const auto it = realtime_value_lines_.find(label);
         QString value_text;
         if (it != realtime_value_lines_.end()) {

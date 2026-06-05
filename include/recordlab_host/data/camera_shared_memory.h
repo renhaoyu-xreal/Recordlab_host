@@ -35,11 +35,18 @@ public:
 
 private:
     bool attach(const std::string& shm_name);
+    bool loadLayout();
 
     int fd_ = -1;
     const char* mapping_ = nullptr;
     std::size_t mapping_size_ = 0;
     std::string shm_name_;
+    int camera_count_ = 2;
+    int slot_count_ = 4;
+    int meta_size_ = 64;
+    int slot_size_ = 4 * 1024 * 1024;
+    std::size_t seq_offset_ = 0;
+    std::size_t slots_offset_ = 0;
 };
 
 }  // namespace recordlab::host

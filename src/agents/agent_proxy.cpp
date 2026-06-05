@@ -10,11 +10,14 @@ namespace recordlab::host {
 
 AgentProxy::AgentProxy(AgentConfig config, std::string agents_config_path,
                        std::string nodes_root, std::string echo_python_root,
+                       std::string python_bin, std::string node_runtime_module,
                        ProcessOutputCallback process_output_callback)
     : config_(std::move(config)),
       agents_config_path_(std::move(agents_config_path)),
       nodes_root_(std::move(nodes_root)),
       echo_python_root_(std::move(echo_python_root)),
+      python_bin_(std::move(python_bin)),
+      node_runtime_module_(std::move(node_runtime_module)),
       process_output_callback_(std::move(process_output_callback)) {}
 
 AgentProxy::~AgentProxy() {
@@ -82,13 +85,12 @@ void AgentProxy::startNodeProcess() {
 
     node_process_ = std::make_unique<ProcessHandle>();
     const std::string pythonpath = nodes_root_ + ":" + echo_python_root_;
-    const char* python_bin_env = std::getenv("RECORDLAB_PYTHON_BIN");
-    const std::string python_bin = python_bin_env && *python_bin_env ? python_bin_env : "python3.10";
     common::Logger::instance().log(
         common::LogLevel::Info,
         "AgentProxy",
         "launch node_runtime agent=" + config_.name +
-            ", python=" + python_bin +
+            ", python=" + python_bin_ +
+            ", module=" + node_runtime_module_ +
             ", cwd=" + nodes_root_ +
             ", pythonpath=" + pythonpath,
         {
@@ -98,7 +100,7 @@ void AgentProxy::startNodeProcess() {
             {"process_type", config_.process_type.empty() ? "python_node" : config_.process_type},
         });
     node_process_->start(
-        {python_bin, "-m", "recordlab_nodes.core.node_runtime",
+        {python_bin_, "-m", node_runtime_module_,
          "--config", agents_config_path_, "--agent", config_.name},
         nodes_root_, pythonpath,
         {
@@ -112,7 +114,7 @@ void AgentProxy::startNodeProcess() {
 bool AgentProxy::ensureClient() {
     if (!action_client_) {
         action_client_ = std::make_unique<EchoActionClient>(
-            config_.subnode_host, config_.goal_port, config_.feedback_port, 3000);
+            config_.subnode_host, config_.goal_port, config_.feedback_port, 3000, config_.action_name + "_client");
     }
     for (int attempt = 0; attempt < 20; ++attempt) {
         if (action_client_->waitForServer(1000)) {

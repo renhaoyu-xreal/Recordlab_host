@@ -20,7 +20,8 @@ namespace recordlab::host {
 class AgentManager {
 public:
     AgentManager(HostMessageBus& bus, std::string agents_config_path,
-                 std::string nodes_root, std::string echo_python_root);
+                 std::string nodes_root, std::string echo_python_root,
+                 std::string python_bin, std::string node_runtime_module);
     ~AgentManager();
 
     AgentManager(const AgentManager&) = delete;
@@ -50,6 +51,8 @@ private:
     std::string agents_config_path_;
     std::string nodes_root_;
     std::string echo_python_root_;
+    std::string python_bin_;
+    std::string node_runtime_module_;
 
     std::unordered_map<std::string, std::unique_ptr<AgentProxy>> agents_;
     std::string active_agent_;

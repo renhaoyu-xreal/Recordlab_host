@@ -2,6 +2,7 @@
 
 #include "recordlab_host/agents/agent_manager.h"
 #include "recordlab_host/bus/host_message_bus.h"
+#include "recordlab_host/data/data_registry_server.h"
 #include "recordlab_host/data/data_receiver.h"
 #include "recordlab_host/lifecycle/watchdog.h"
 #include "recordlab_host/scripts/scripts_actuator.h"
@@ -9,6 +10,7 @@
 #include <QMainWindow>
 #include <QStringList>
 #include <QTimer>
+#include <QPair>
 
 #include <memory>
 #include <string>
@@ -30,6 +32,11 @@ public:
     explicit MainWindow(std::string agents_config_path,
                         std::string nodes_root,
                         std::string echo_python_root,
+                        std::string data_root = {},
+                        std::string python_bin = {},
+                        std::string node_runtime_module = {},
+                        std::string data_registry_host = "127.0.0.1",
+                        int data_registry_port = 16600,
                         QWidget* parent = nullptr);
     ~MainWindow() override;
 
@@ -57,6 +64,9 @@ public slots:
 private:
     void loadAgents();
     void handleUIMessage(const HostMessage& msg);
+    void applyUiBindings(const std::string& topic, const nlohmann::json& value);
+    QPair<QString, QString> renderNotification(const nlohmann::json& payload) const;
+    void handleDialogRequest(const HostMessage& msg);
     void appendLog(const QString& message);
     void reportQtException(const QString& context, const std::exception* error = nullptr);
 
@@ -64,6 +74,11 @@ private:
     std::string agents_config_path_;
     QString nodes_root_;
     QString echo_python_root_;
+    QString data_root_;
+    QString python_bin_;
+    QString node_runtime_module_;
+    QString data_registry_host_;
+    int data_registry_port_ = 16600;
     QString active_agent_;
 
     // ── Architecture components (PLAN.md) ──────────────────────
@@ -71,6 +86,7 @@ private:
     std::unique_ptr<AgentManager> agent_manager_;
     std::unique_ptr<Watchdog> watchdog_;
     std::unique_ptr<DataReceiver> data_receiver_;
+    std::unique_ptr<DataRegistryServer> data_registry_server_;
     std::unique_ptr<ScriptsActuator> scripts_actuator_;
     QTimer* bus_poll_timer_ = nullptr;
 

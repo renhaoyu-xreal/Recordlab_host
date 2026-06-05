@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QSet>
 #include <QWidget>
 
 #include <nlohmann/json.hpp>
@@ -28,6 +29,7 @@ public:
     DataPage* dataPage() const;
     void bindMainWindow(MainWindow* mainWindow);
     void handleTopicData(const QString& name, const nlohmann::json& value, double frequency);
+    void configureSensorLayout(const nlohmann::json& sensor_layout);
 
 signals:
     void backRequested();
@@ -43,7 +45,7 @@ private:
     ScriptPage* script_page_ = nullptr;
     DataPage* data_page_ = nullptr;
     MainWindow* main_window_ = nullptr;
-    bool saw_imu_data_ = false;
+    QSet<QString> active_tab_only_topics_;
 };
 
 }  // namespace recordlab::host::ui

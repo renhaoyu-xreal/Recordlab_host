@@ -26,6 +26,9 @@ struct HostMessage {
 class HostMessageBus {
 public:
     void registerConsumer(const std::string& target);
+    void subscribe(const std::string& target,
+                   const std::string& type_pattern,
+                   const std::string& source_pattern = "*");
     void publish(HostMessage message);
     std::optional<HostMessage> waitFor(const std::string& target, int timeout_ms);
 
@@ -38,6 +41,12 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::map<std::string, std::deque<HostMessage>> queues_;
+    struct Subscription {
+        std::string target;
+        std::string type_pattern;
+        std::string source_pattern;
+    };
+    std::vector<Subscription> subscriptions_;
 };
 
 }  // namespace recordlab::host

@@ -83,10 +83,6 @@ ScriptPage::ScriptPage(QWidget* parent) : QWidget(parent) {
     script_list_->setStyleSheet(QStringLiteral(
         "QListWidget { background-color: #ffffe0; border: 1px solid #888; padding: 5px; }"
         "QListWidget::item:selected { background-color: #d7e7ff; color: #000000; }"));
-    script_list_->addItems({
-        QStringLiteral("record_ur_gt_3dof.py"),
-        QStringLiteral("check_environment.py"),
-    });
     script_layout->addWidget(script_list_);
     right_layout->addWidget(script_group, 2);
 
@@ -164,7 +160,7 @@ ScriptPage::ScriptPage(QWidget* parent) : QWidget(parent) {
         "QTabWidget::pane { border: 1px solid #b6b0a4; background: #f4f1ea; }"
         "QTabBar::tab { min-height: 20px; padding: 3px 10px; background: #e8e4dc; border: 1px solid #b6b0a4; }"
         "QTabBar::tab:selected { background: #fffdf2; font-weight: 600; }"));
-    auto* data_output = new DataOutputDirectoryWidget(QStringLiteral("third_party/Recordlab_nodes/data"), output_tabs_);
+    auto* data_output = new DataOutputDirectoryWidget(QStringLiteral("data"), output_tabs_);
     data_output->setObjectName(QStringLiteral("script_data_output_widget"));
     connect(data_output, &DataOutputDirectoryWidget::messageReady, this, [this](const QString& message) {
             if (log_view_) log_view_->appendPlainText(message);

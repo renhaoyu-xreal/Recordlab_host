@@ -138,7 +138,7 @@ void WorkspacePage::bindMainWindow(MainWindow* mainWindow) {
 }
 
 void WorkspacePage::handleTopicData(const QString& name, const nlohmann::json& value, double frequency) {
-    if (name == QStringLiteral("camera_data")) {
+    if (active_tab_only_topics_.contains(name)) {
         auto* active_workspace = tabs_->currentWidget() == script_page_
             ? script_page_->sensorWorkspace()
             : data_page_->sensorWorkspace();
@@ -149,8 +149,9 @@ void WorkspacePage::handleTopicData(const QString& name, const nlohmann::json& v
             common::Logger::instance().log(
                 common::LogLevel::Debug,
                 "WorkspacePage",
-                "camera_data dispatched active_tab="
+                "active-tab topic dispatched active_tab="
                     + tabs_->tabText(tabs_->currentIndex()).toStdString()
+                    + " topic=" + name.toStdString()
                     + " payload_json_bytes=" + std::to_string(value.dump().size())
                     + " ui_frequency_hz=" + std::to_string(frequency));
             last_debug_log = now;
@@ -159,10 +160,25 @@ void WorkspacePage::handleTopicData(const QString& name, const nlohmann::json& v
         script_page_->sensorWorkspace()->handleRealtimeData(name, value, frequency);
         data_page_->sensorWorkspace()->handleRealtimeData(name, value, frequency);
     }
-    if (name == QStringLiteral("imu_data") && !saw_imu_data_) {
-        saw_imu_data_ = true;
-        script_page_->logView()->appendPlainText(QStringLiteral("UI 已接收 imu_data，实时值区域开始刷新。"));
-        data_page_->logView()->appendPlainText(QStringLiteral("UI 已接收 imu_data，实时值区域开始刷新。"));
+}
+
+void WorkspacePage::configureSensorLayout(const nlohmann::json& sensor_layout) {
+    active_tab_only_topics_.clear();
+    if (sensor_layout.is_object()) {
+        for (const auto& [topic, layout] : sensor_layout.items()) {
+            if (!layout.is_object()) {
+                continue;
+            }
+            if (layout.value("ui_widget", std::string{}) == "camera_preview") {
+                active_tab_only_topics_.insert(QString::fromStdString(topic));
+            }
+        }
+    }
+    if (script_page_ && script_page_->sensorWorkspace()) {
+        script_page_->sensorWorkspace()->configureLayout(sensor_layout);
+    }
+    if (data_page_ && data_page_->sensorWorkspace()) {
+        data_page_->sensorWorkspace()->configureLayout(sensor_layout);
     }
 }
 

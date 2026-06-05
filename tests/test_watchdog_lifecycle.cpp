@@ -104,7 +104,8 @@ int main() {
 
         auto notification = waitForType(bus, msg::UI, msg::USER_NOTIFICATION);
         assert(notification.payload.value("severity", "") == "critical");
-        assert(notification.payload.value("message", "").find("拔出眼镜") != std::string::npos);
+        assert(notification.payload.value("error_code", "") == "INIT_DEVICE_FAILED");
+        assert(notification.payload.value("state", "") == "ERROR");
 
         auto healthy_check = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST, 4000);
         assert(healthy_check.payload.value("cmd", "") == "check");

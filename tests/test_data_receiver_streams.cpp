@@ -97,6 +97,52 @@ int main() {
         assert(latest_hz[5] > 900.0 && latest_hz[5] < 1100.0);
     }
 
+    {
+        recordlab::host::HostMessageBus bus;
+        recordlab::host::DataReceiver receiver(bus);
+        echo::Publisher publisher("node_cookie");
+
+        receiver.subscribe("127.0.0.1", {
+            recordlab::host::DataReceiver::TopicConfig{
+                "node_cookie",
+                publisher.getPort(),
+                "json",
+                "json",
+                1000.0,
+                nlohmann::json::object(),
+                nlohmann::json{{"role", "host_cookie"}},
+            },
+        });
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        publisher.publishRaw(R"({"key":"FSN","value":"ABC123","isDisplay":true})");
+        publisher.publishRaw(R"({"cookies":[{"key":"hidden","value":"internal","is_display":false}]})");
+
+        nlohmann::json cookies;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto msg = bus.waitFor(recordlab::host::msg::UI, 100);
+            if (!msg || msg->type != recordlab::host::msg::NODE_COOKIES) {
+                continue;
+            }
+            cookies = msg->payload.value("cookies", nlohmann::json::array());
+            bool saw_fsn = false;
+            bool saw_hidden = false;
+            for (const auto& item : cookies) {
+                if (item.value("key", std::string{}) == "FSN") {
+                    saw_fsn = item.value("is_display", false) && item.value("value", std::string{}) == "ABC123";
+                }
+                if (item.value("key", std::string{}) == "hidden") {
+                    saw_hidden = !item.value("is_display", true);
+                }
+            }
+            if (saw_fsn && saw_hidden) {
+                break;
+            }
+        }
+        assert(receiver.cookies().value("cookies", nlohmann::json::array()).size() == 2);
+    }
+
     std::cout << "data receiver streams ok\n";
     return 0;
 }

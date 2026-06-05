@@ -17,10 +17,14 @@
 #include <QTabWidget>
 #include <nlohmann/json.hpp>
 
+#include <arpa/inet.h>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <netinet/in.h>
 #include <string>
+#include <sys/socket.h>
+#include <unistd.h>
 
 namespace {
 
@@ -36,6 +40,20 @@ void require(bool condition, const std::string& message) {
         std::cerr << message << std::endl;
         std::exit(1);
     }
+}
+
+int freePort() {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    addr.sin_port = 0;
+    bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    socklen_t len = sizeof(addr);
+    getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len);
+    const int port = ntohs(addr.sin_port);
+    close(fd);
+    return port;
 }
 
 }  // namespace
@@ -56,15 +74,14 @@ int main(int argc, char** argv) {
           "goal_port": 5690,
           "feedback_port": 5691,
           "data_port": 16510,
-          "root_path": "data",
-          "topics": []
+          "root_path": "data"
         }
       },
       "primary_agents": ["imu_simulation"]
     })";
     config.close();
 
-    recordlab::host::ui::MainWindow window(config_path, ".", ".");
+    recordlab::host::ui::MainWindow window(config_path, ".", ".", {}, {}, {}, "127.0.0.1", freePort());
     auto* entry = window.entryPage();
     require(entry != nullptr, "entry page missing");
     require(entry->findChild<QPushButton*>("agent_button_imu_simulation") != nullptr, "agent button missing");
@@ -98,6 +115,21 @@ int main(int argc, char** argv) {
     require(command_data_group->title().startsWith(QStringLiteral("data输出目录：")), "command data group should include output path");
 
     auto* script_workspace = workspace->scriptPage()->sensorWorkspace();
+    workspace->configureSensorLayout(nlohmann::json{
+        {"imu_data", {
+            {"channels", {
+                {{"type", 1}, {"label", "IMU0-gyro"}},
+                {{"type", 2}, {"label", "IMU0-acc"}},
+                {{"type", 3}, {"label", "IMU0-mag"}},
+                {{"type", 12}, {"label", "IMU0-temperature"}},
+                {{"type", 4}, {"label", "IMU1-gyro"}},
+                {{"type", 5}, {"label", "IMU1-acc"}},
+                {{"type", 13}, {"label", "IMU1-temperature"}},
+            }},
+        }},
+        {"motion_status", {{"display_name", "motion_status"}, {"ui_widget", "label"}}},
+        {"camera_data", {{"display_name", "camera_data"}, {"ui_widget", "camera_preview"}}},
+    });
     require(script_workspace->findChild<QGroupBox*>("data_selection_group") != nullptr, "data selection group missing");
     require(script_workspace->findChild<QGroupBox*>("custom_data_group") != nullptr, "custom data group missing");
     require(script_workspace->findChild<QGroupBox*>("realtime_values_group") != nullptr, "realtime values group missing");

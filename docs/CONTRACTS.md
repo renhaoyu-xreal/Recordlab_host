@@ -71,13 +71,19 @@ ScriptsActuator 或 DataRegistryServer 边界。
 | `agent_activated` | AgentManager                    | UI                      | `{agent_name, success, message, subnode_host, topics, init_device_params}` |
 | `watchdog_state`  | Watchdog                        | UI                      | `{agent_name, state, reason, consecutive_failures}`          |
 | `log_entry`       | 主机模块                        | UI                      | `{message}`                                                  |
+| `ui.dialog.request` | ScriptsActuator/主机模块      | UI                      | `{dialog_id, kind, title, message, ...}`                     |
+| `ui.dialog.response` | UI                           | 原始请求方              | `{dialog_id, success, cancelled, response}`                  |
 | `run_script`      | UI                              | ScriptsActuator         | `{script_path, agent_name}`                                  |
 | `stop_script`     | UI                              | ScriptsActuator         | `{}`                                                         |
 | `script_started`  | ScriptsActuator                 | UI                      | `{script_id, script_path, agent_name, pid}`                  |
 | `script_output`   | ScriptsActuator                 | UI                      | `{text, stream, process, script_path, pid, script_id}`       |
 | `script_finished` | ScriptsActuator                 | UI                      | `{script_id, script_path, pid, exit_code}`                   |
 | `process_output`  | AgentManager/ProcessHandle      | UI                      | `{text, stream, process, pid, agent_name, node_name}`        |
-| `topic_data`      | DataReceiver                    | UI                      | `{topic_name, value, frequency_hz, first_message}`           |
+| `topic_data`      | DataReceiver                    | UI                      | `{topic_name, stream_key, value, frequency_hz, stream_frequencies_hz, display_values, ui_signal, first_message}` |
+| `node_cookies`    | DataReceiver                    | UI                      | `{cookies:[{key,value,is_display,source_topic}]}`                    |
+| `data.registered` | DataRegistryServer              | DataReceiver/UI         | `{stream}`                                                   |
+| `data.unregistered` | DataRegistryServer            | DataReceiver/UI         | `{stream}`                                                   |
+| `recording_state` | DataReceiver/AgentManager       | UI                      | `{state, source, ...}`                                       |
 
 `cmd_request` 向后兼容旧载荷 `{cmd, params}`；当
 缺少 `agent_name` 时，AgentManager 会使用当前激活的 agent。
@@ -99,8 +105,13 @@ ScriptsActuator 或 DataRegistryServer 边界。
 | `root_path`                  | 可选     | Python 节点             | 默认为 `data`。                                              |
 | `init_device_params`         | 可选     | Python 节点命令         | 默认为 `{}`。                                                |
 | `init_device_pause_duration` | 可选     | Python 节点/工作流      | 默认为 `0.0`。                                               |
-| `topics`                     | 可选     | DataReceiver            | 静态 topic 列表；元素只包含 `name/encoding`，不包含 `port`。  |
+| `topics`                     | 可选     | DataReceiver            | 静态 topic 列表；元素只包含 `name/encoding`，不包含 `port`；可引用 `shared.topic_sets`。 |
 | `default_scripts`            | 可选     | UI/ScriptsActuator      | 为所选 agent 列出的脚本。                                    |
+| `exposed_commands`           | 可选     | UI                      | 数据页命令下拉列表；可引用 `shared.exposed_commands`。        |
+| `commands`                   | 可选     | AgentManager            | 可引用 `shared.commands`；`{default_timeout_ms, items:[{name, timeout_ms}]}` 控制 Host 命令超时，不限制 node 支持的业务命令。 |
+| `sensor_layout`              | 可选     | UI                      | 可引用 `shared.sensor_layouts`；描述传感器列表、通道标签、状态/图像 widget 等 UI 布局。 |
+| `error_messages`             | 可选     | UI/Watchdog             | 可引用 `shared.error_messages`；错误码到标题/正文模板的映射；Watchdog 只发布错误码。 |
+| `ui_bindings`                | 可选     | UI                      | 可引用 `shared.ui_bindings`；topic 字段到 UI signal 的映射，例如 `record_timer/time_delay`。 |
 | `custom_params`              | 可选     | Python 节点             | agent 专用的业务参数。                                       |
 
 当前字段中不包括：`subnode_path`、`supported_devices`。
@@ -139,5 +150,45 @@ AgentProxy 只负责传输命令。命令的具体实现属于节点。
 | `record_timer`  | Python 节点 | DataReceiver/UI | `json`        |
 | `time_delay`    | Python 节点 | DataReceiver/UI | `json`        |
 | `motion_status` | Python 节点 | DataReceiver/UI | `json`        |
+| `node_cookie`   | Python 节点 | DataReceiver/UI | `json`        |
 
-以上静态 topic 使用所属 agent 的 `data_port`。当前主机边界中尚未实现动态 topic 注册。
+以上静态 topic 使用所属 agent 的 `data_port`。Host 会将静态 topic 作为兼容注册源写入 DataRegistryServer。
+`node_cookie` 需要在 topic metadata 中声明 `{role:"host_cookie"}`，DataReceiver
+会维护 `{key,value,is_display,source_topic}` 表。UI 只展示
+`isDisplay/is_display=true` 的条目；节点决定哪些 cookie 可展示。
+
+## DataRegistryServer
+
+Host 启动本地 DataRegistryServer，默认 `127.0.0.1:16600`，可由
+`host_runtime.json` 或 `RECORDLAB_DATA_REGISTRY_PORT` 覆盖。协议是 raw JSON
+over ZeroMQ REQ/REP：
+
+- `register_data`: `{action:"register_data", stream:{data_name,data_type,host,port,node_name,encoding,parse_mode,ui_max_hz,qos,metadata}}`
+- `unregister_data`: `{action:"unregister_data", stream:{data_name,port,node_name}}`
+- `list_data`: `{action:"list_data"}`
+
+Host 兼容旧静态 `topics`：激活 agent 时会把静态 topic 注册进 registry。
+Nodes 的 `PublisherManager` 启停时也会通过 `DataRegistryClient` 主动注册/注销。
+
+## Runtime 配置
+
+`config/host_runtime.json` 是 Host 运行环境入口，支持
+`agents_config_path/nodes_root/echo_python_root/data_root/logs_root/python_bin/node_runtime_module/data_registry_host/data_registry_port`。
+环境变量 `RECORDLAB_AGENTS_CONFIG`、`RECORDLAB_NODES_ROOT`、
+`ECHO_MESSAGE_SYSTEM_PYTHON_ROOT`、`RECORDLAB_DATA_ROOT`、
+`RECORDLAB_LOG_DIR`、`RECORDLAB_PYTHON_BIN`、`RECORDLAB_NODE_RUNTIME_MODULE`、
+`RECORDLAB_DATA_REGISTRY_HOST`、`RECORDLAB_DATA_REGISTRY_PORT` 优先于文件配置。
+
+## Release 打包
+
+Host 顶层 `scripts/package_release.sh` 负责打包完整可运行项目，输出
+`dist/RecordLabHost` 和 `dist/RecordLabHost-linux-x86_64.tar.gz`。包内包含：
+
+- `build/recordlab_host_app`、`build/recordlab_cli`
+- `config/host_runtime.json`
+- `host_scripts/`
+- `third_party/Recordlab_nodes/`
+- `third_party/echo_message_system/`
+- 可选 `third_party/xreal_glasses/`
+
+Nodes 仓库不再拥有 release package 脚本。

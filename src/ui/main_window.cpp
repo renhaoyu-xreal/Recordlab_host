@@ -11,7 +11,9 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
+#include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -19,6 +21,7 @@
 #include <QStackedWidget>
 
 #include <exception>
+#include <cstdlib>
 
 namespace recordlab::host::ui {
 
@@ -36,16 +39,48 @@ bool isCheckLogMessage(const QString& message) {
         || trimmed.startsWith(QStringLiteral("check 失败:"));
 }
 
+QString replaceTemplateVars(QString text, const nlohmann::json& vars) {
+    if (!vars.is_object()) return text;
+    for (const auto& [key, value] : vars.items()) {
+        QString replacement;
+        if (value.is_string()) replacement = QString::fromStdString(value.get<std::string>());
+        else if (value.is_number_float()) replacement = QString::number(value.get<double>());
+        else if (value.is_number_integer()) replacement = QString::number(value.get<long long>());
+        else if (value.is_boolean()) replacement = value.get<bool>() ? QStringLiteral("true") : QStringLiteral("false");
+        else replacement = QString::fromStdString(value.dump());
+        text.replace(QStringLiteral("${%1}").arg(QString::fromStdString(key)), replacement);
+    }
+    return text;
+}
+
 }  // namespace
 
 MainWindow::MainWindow(std::string agents_config_path,
                        std::string nodes_root,
                        std::string echo_python_root,
+                       std::string data_root,
+                       std::string python_bin,
+                       std::string node_runtime_module,
+                       std::string data_registry_host,
+                       int data_registry_port,
                        QWidget* parent)
     : QMainWindow(parent),
       agents_config_path_(std::move(agents_config_path)),
       nodes_root_(QString::fromStdString(nodes_root)),
-      echo_python_root_(QString::fromStdString(echo_python_root)) {
+      echo_python_root_(QString::fromStdString(echo_python_root)),
+      data_root_(QString::fromStdString(data_root)),
+      python_bin_(QString::fromStdString(python_bin)),
+      node_runtime_module_(QString::fromStdString(node_runtime_module)),
+      data_registry_host_(QString::fromStdString(data_registry_host)),
+      data_registry_port_(data_registry_port) {
+    ::setenv("RECORDLAB_DATA_REGISTRY_HOST", data_registry_host.c_str(), 1);
+    ::setenv("RECORDLAB_DATA_REGISTRY_PORT", std::to_string(data_registry_port).c_str(), 1);
+    if (!python_bin.empty()) {
+        ::setenv("RECORDLAB_PYTHON_BIN", python_bin.c_str(), 1);
+    }
+    if (!node_runtime_module.empty()) {
+        ::setenv("RECORDLAB_NODE_RUNTIME_MODULE", node_runtime_module.c_str(), 1);
+    }
     setObjectName(QStringLiteral("recordlab_main_window"));
     setWindowTitle(QStringLiteral("RecordLab"));
     resize(1440, 900);
@@ -54,18 +89,23 @@ MainWindow::MainWindow(std::string agents_config_path,
     bus_.registerConsumer(msg::UI);
 
     agent_manager_ = std::make_unique<AgentManager>(
-        bus_, agents_config_path_, nodes_root, echo_python_root);
+        bus_, agents_config_path_, nodes_root, echo_python_root, python_bin, node_runtime_module);
     agent_manager_->start();
 
     data_receiver_ = std::make_unique<DataReceiver>(bus_);
+    data_registry_server_ = std::make_unique<DataRegistryServer>(
+        bus_, data_registry_host, data_registry_port);
+    data_registry_server_->start();
 
     watchdog_ = std::make_unique<Watchdog>(bus_);
     watchdog_->start();
 
     scripts_actuator_ = std::make_unique<ScriptsActuator>(
         bus_, nodes_root_, echo_python_root_,
-        QString::fromStdString(agents_config_path_), this);
-    const QString data_root = QDir(nodes_root_).filePath(QStringLiteral("data"));
+        QString::fromStdString(agents_config_path_), python_bin_, this);
+    const QString data_root_qt = data_root_.trimmed().isEmpty()
+        ? QDir(nodes_root_).filePath(QStringLiteral("data"))
+        : data_root_;
 
     // ── Bus poll timer (~60 Hz) ────────────────────────────────
     bus_poll_timer_ = new QTimer(this);
@@ -86,8 +126,8 @@ MainWindow::MainWindow(std::string agents_config_path,
     entry_page_ = new EntryPage(stack_);
     workspace_page_ = new WorkspacePage(stack_);
     workspace_page_->bindMainWindow(this);
-    workspace_page_->scriptPage()->setDataRoot(data_root);
-    workspace_page_->dataPage()->setDataRoot(data_root);
+    workspace_page_->scriptPage()->setDataRoot(data_root_qt);
+    workspace_page_->dataPage()->setDataRoot(data_root_qt);
     stack_->addWidget(entry_page_);
     stack_->addWidget(workspace_page_);
     setCentralWidget(stack_);
@@ -95,11 +135,14 @@ MainWindow::MainWindow(std::string agents_config_path,
     connect(entry_page_, &EntryPage::agentSelected, this, [this](const QString& agent_name) {
         try {
             workspace_page_->activateAgent(agent_name);
+            const auto config = agent_manager_->loadAgentConfig(agent_name.toStdString());
             QStringList scripts;
-            for (const auto& script : agent_manager_->loadAgentConfig(agent_name.toStdString()).default_scripts) {
+            for (const auto& script : config.default_scripts) {
                 scripts << QString::fromStdString(script);
             }
             workspace_page_->scriptPage()->setScripts(scripts);
+            workspace_page_->dataPage()->setCommands(config.exposed_commands);
+            workspace_page_->configureSensorLayout(config.sensor_layout);
             stack_->setCurrentWidget(workspace_page_);
             showMaximized();
             this->activateAgent(agent_name);
@@ -164,10 +207,25 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         if (workspace_page_) {
             workspace_page_->handleTopicData(name, value, freq);
         }
-        if (name == QStringLiteral("record_timer") && value.is_object())
-            emit recordTimerChanged(value.value("duration_ns", 0.0) / 1e9);
-        else if (name == QStringLiteral("time_delay") && value.is_object())
-            emit timeDelayChanged(value.value("time_delay_ns", 0.0) / 1e6);
+        applyUiBindings(topic, value);
+        return;
+    }
+    if (m.type == msg::DATA_REGISTERED) {
+        if (data_receiver_) {
+            data_receiver_->registerDataStream(dataStreamRegistrationFromJson(m.payload.value("stream", nlohmann::json::object())));
+        }
+        return;
+    }
+    if (m.type == msg::DATA_UNREGISTERED) {
+        if (data_receiver_) {
+            data_receiver_->unregisterDataStream(dataStreamRegistrationFromJson(m.payload.value("stream", nlohmann::json::object())));
+        }
+        return;
+    }
+    if (m.type == msg::NODE_COOKIES) {
+        if (workspace_page_ && workspace_page_->dataPage()) {
+            workspace_page_->dataPage()->setCookies(m.payload);
+        }
         return;
     }
 
@@ -187,8 +245,9 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         return;
     }
     if (m.type == msg::USER_NOTIFICATION) {
-        const QString title = QString::fromStdString(m.payload.value("title", std::string("RecordLab 提示")));
-        const QString message = QString::fromStdString(m.payload.value("message", std::string{}));
+        const auto rendered = renderNotification(m.payload);
+        const QString title = rendered.first;
+        const QString message = rendered.second;
         const QString severity = QString::fromStdString(m.payload.value("severity", std::string("info")));
         if (severity == QStringLiteral("critical") || severity == QStringLiteral("error")) {
             QMessageBox::critical(this, title, message);
@@ -199,16 +258,24 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         }
         return;
     }
+    if (m.type == msg::UI_DIALOG_REQUEST) {
+        handleDialogRequest(m);
+        return;
+    }
     if (m.type == msg::AGENT_ACTIVATED) {
         if (m.payload.value("success", false)) {
             const auto agent_name = m.payload.value("agent_name", std::string{});
             if (watchdog_) watchdog_->setActiveAgent(agent_name);
             if (data_receiver_) {
                 const auto config = agent_manager_->loadAgentConfig(agent_name);
-                std::vector<DataReceiver::TopicConfig> topics;
-                for (const auto& t : config.topics)
-                    topics.push_back({t.name, config.data_port, t.encoding, t.parse_mode, t.ui_max_hz, t.qos});
-                data_receiver_->subscribe(config.subnode_host, topics);
+                for (const auto& t : config.topics) {
+                    if (data_registry_server_) {
+                        data_registry_server_->registerStatic({
+                            t.name, "topic", config.subnode_host, config.data_port, config.name,
+                            t.encoding, t.parse_mode, t.ui_max_hz, t.qos, t.metadata,
+                        });
+                    }
+                }
             }
         }
         return;
@@ -257,6 +324,94 @@ void MainWindow::appendLog(const QString& message) {
     common::Logger::instance().appendUiLine(line.toStdString());
     common::Logger::instance().log(common::LogLevel::Info, "UI", message.toStdString());
     emit logMessage(line);
+}
+
+void MainWindow::applyUiBindings(const std::string& topic, const nlohmann::json& value) {
+    nlohmann::json bindings = nlohmann::json::object();
+    if (!active_agent_.trimmed().isEmpty() && agent_manager_) {
+        try {
+            bindings = agent_manager_->loadAgentConfig(active_agent_.toStdString()).ui_bindings;
+        } catch (...) {
+        }
+    }
+    const auto topic_binding = bindings.is_object() ? bindings.find(topic) : bindings.end();
+    if (topic_binding != bindings.end() && topic_binding->is_object()) {
+        const std::string signal = topic_binding->value("signal", std::string{});
+        const std::string field = topic_binding->value("field", std::string{});
+        const double scale = topic_binding->value("scale", 1.0);
+        if (!field.empty() && value.is_object()) {
+            const auto it = value.find(field);
+            if (it != value.end() && it->is_number()) {
+                const double converted = it->get<double>() * scale;
+                if (signal == "record_timer") emit recordTimerChanged(converted);
+                if (signal == "time_delay") emit timeDelayChanged(converted);
+                return;
+            }
+        }
+    }
+    if (topic == "record_timer" && value.is_object()) {
+        emit recordTimerChanged(value.value("duration_ns", 0.0) / 1e9);
+    } else if (topic == "time_delay" && value.is_object()) {
+        emit timeDelayChanged(value.value("time_delay_ns", 0.0) / 1e6);
+    }
+}
+
+QPair<QString, QString> MainWindow::renderNotification(const nlohmann::json& payload) const {
+    QString title = QString::fromStdString(payload.value("title", std::string("RecordLab 提示")));
+    QString message = QString::fromStdString(payload.value("message", std::string{}));
+    const std::string code = payload.value("error_code", std::string{});
+    if (!code.empty() && agent_manager_) {
+        try {
+            const auto agent_name = payload.value("agent_name", active_agent_.toStdString());
+            const auto config = agent_manager_->loadAgentConfig(agent_name);
+            const auto it = config.error_messages.find(code);
+            if (it != config.error_messages.end() && it->is_object()) {
+                title = QString::fromStdString(it->value("title", std::string("RecordLab 提示")));
+                message = QString::fromStdString(it->value("message", std::string{}));
+                nlohmann::json vars = payload.value("params", nlohmann::json::object());
+                vars["agent_name"] = agent_name;
+                vars["state"] = payload.value("state", std::string{});
+                vars["reason"] = payload.value("reason", std::string{});
+                title = replaceTemplateVars(title, vars);
+                message = replaceTemplateVars(message, vars);
+            }
+        } catch (...) {
+        }
+    }
+    return {title, message};
+}
+
+void MainWindow::handleDialogRequest(const HostMessage& m) {
+    const QString dialog_id = QString::fromStdString(m.payload.value("dialog_id", m.payload.value("id", std::string{})));
+    const QString kind = QString::fromStdString(m.payload.value("kind", std::string("info")));
+    const QString title = QString::fromStdString(m.payload.value("title", std::string("RecordLab")));
+    const QString message = QString::fromStdString(m.payload.value("message", std::string{}));
+    nlohmann::json response = {
+        {"dialog_id", dialog_id.toStdString()},
+        {"id", dialog_id.toStdString()},
+        {"success", true},
+        {"cancelled", false},
+    };
+    if (kind == QStringLiteral("question")) {
+        response["response"] = QMessageBox::question(this, title, message, QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::Yes;
+    } else if (kind == QStringLiteral("input")) {
+        bool ok = false;
+        const QString value = QInputDialog::getText(this, title, message, QLineEdit::Normal,
+                                                    QString::fromStdString(m.payload.value("default", std::string{})), &ok);
+        response["cancelled"] = !ok;
+        response["response"] = value.toStdString();
+    } else {
+        if (kind == QStringLiteral("error")) QMessageBox::critical(this, title, message);
+        else if (kind == QStringLiteral("warning")) QMessageBox::warning(this, title, message);
+        else QMessageBox::information(this, title, message);
+        response["response"] = true;
+    }
+    bus_.publish({
+        .source = msg::UI,
+        .target = m.source.empty() ? msg::SCRIPTS_ACTUATOR : m.source,
+        .type = msg::UI_DIALOG_RESPONSE,
+        .payload = std::move(response),
+    });
 }
 
 // ── Slots ──────────────────────────────────────────────────────
@@ -346,6 +501,8 @@ void MainWindow::shutdown() {
         }
         scripts_actuator_.reset();
         data_receiver_.reset();
+        if (data_registry_server_) data_registry_server_->stop();
+        data_registry_server_.reset();
         if (agent_manager_) agent_manager_->stop();
         agent_manager_.reset();
     } catch (const std::exception& e) {

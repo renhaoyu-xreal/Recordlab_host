@@ -20,6 +20,7 @@ public:
 
     AgentProxy(AgentConfig config, std::string agents_config_path,
                std::string nodes_root, std::string echo_python_root,
+               std::string python_bin, std::string node_runtime_module,
                ProcessOutputCallback process_output_callback = {});
     ~AgentProxy();
 
@@ -43,6 +44,8 @@ private:
     std::string agents_config_path_;
     std::string nodes_root_;
     std::string echo_python_root_;
+    std::string python_bin_;
+    std::string node_runtime_module_;
     ProcessOutputCallback process_output_callback_;
 
     std::unique_ptr<ProcessHandle> node_process_;

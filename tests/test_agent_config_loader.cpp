@@ -49,19 +49,24 @@ int main() {
         }
     }
     assert(has_camera);
-    auto helen = loader.loadAgent("helen_node");
-    assert(helen.name == "helen_node");
-    assert(helen.node_class.find("HelenMainNode") != std::string::npos);
-    assert(helen.goal_port == 5696);
-    assert(helen.data_port == 16536);
-    assert(!helen.default_scripts.empty());
-    assert(helen.init_device_params.value("allow_ssh_reboot", true) == false);
-    assert(helen.custom_params.value("persist_ssh_artifacts", true) == false);
+    auto mcu = loader.loadAgent("mcu_node");
+    assert(mcu.name == "mcu_node");
+    assert(mcu.node_class.find("McuMainNode") != std::string::npos);
+    assert(mcu.goal_port == 5696);
+    assert(mcu.data_port == 16536);
+    assert(!mcu.default_scripts.empty());
+    assert(!mcu.exposed_commands.empty());
+    assert(mcu.commandTimeoutMs("start_device") == 90000);
+    assert(mcu.sensor_layout.contains("imu_data"));
+    assert(mcu.error_messages.contains("INIT_DEVICE_FAILED"));
+    assert(mcu.ui_bindings.contains("record_timer"));
+    assert(mcu.init_device_params.value("allow_ssh_reboot", true) == false);
+    assert(mcu.custom_params.value("persist_ssh_artifacts", true) == false);
 
     const auto tmp = hostRoot() / "build" / "test_agent_config_loader_tmp.json";
     {
         std::ofstream out(tmp);
-        out << R"({"agents":{"bad":{"node_class":"x.y.Node","goal_port":1,"feedback_port":2,"topics":[]}}})";
+        out << R"({"agents":{"bad":{"node_class":"x.y.Node","goal_port":1,"feedback_port":2,"topics":"empty"}},"shared":{"topic_sets":{"empty":[]}}})";
     }
     bool missing_data_port_failed = false;
     try {
@@ -73,7 +78,7 @@ int main() {
 
     {
         std::ofstream out(tmp);
-        out << R"({"agents":{"bad":{"node_class":"x.y.Node","goal_port":1,"feedback_port":2,"data_port":3,"topics":[{"name":"imu_data","port":4,"encoding":"json"}]}}})";
+        out << R"({"agents":{"bad":{"node_class":"x.y.Node","goal_port":1,"feedback_port":2,"data_port":3,"topics":"bad_topics"}},"shared":{"topic_sets":{"bad_topics":[{"name":"imu_data","port":4,"encoding":"json"}]}}})";
     }
     bool topic_port_failed = false;
     try {

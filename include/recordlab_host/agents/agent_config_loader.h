@@ -12,6 +12,18 @@ struct TopicConfig {
     std::string parse_mode = "json";
     double ui_max_hz = 30.0;
     nlohmann::json qos = nlohmann::json::object();
+    nlohmann::json metadata = nlohmann::json::object();
+};
+
+struct CommandConfig {
+    std::string name;
+    int timeout_ms = 0;
+    nlohmann::json params_schema = nlohmann::json::object();
+};
+
+struct CommandsConfig {
+    int default_timeout_ms = 5000;
+    std::vector<CommandConfig> items;
 };
 
 struct AgentConfig {
@@ -28,7 +40,14 @@ struct AgentConfig {
     double init_device_pause_duration = 0.0;
     std::vector<TopicConfig> topics;
     std::vector<std::string> default_scripts;
+    std::vector<std::string> exposed_commands;
+    CommandsConfig commands;
+    nlohmann::json sensor_layout = nlohmann::json::object();
+    nlohmann::json error_messages = nlohmann::json::object();
+    nlohmann::json ui_bindings = nlohmann::json::object();
     nlohmann::json custom_params = nlohmann::json::object();
+
+    int commandTimeoutMs(const std::string& cmd) const;
 };
 
 class AgentConfigLoader {
