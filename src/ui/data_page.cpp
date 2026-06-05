@@ -107,6 +107,7 @@ DataPage::DataPage(QWidget* parent) : QWidget(parent) {
     root_layout->addWidget(top_splitter, 4);
 
     auto* bottom_splitter = new QSplitter(Qt::Horizontal, this);
+    bottom_splitter->setObjectName(QStringLiteral("command_bottom_splitter"));
     bottom_splitter->setChildrenCollapsible(false);
 
     auto* log_group = new QGroupBox(QStringLiteral("运行日志"), bottom_splitter);
@@ -132,9 +133,9 @@ DataPage::DataPage(QWidget* parent) : QWidget(parent) {
     connect(data_output, &DataOutputDirectoryWidget::titleChanged, data_group, &QGroupBox::setTitle);
     data_layout->addWidget(data_output);
     bottom_splitter->addWidget(data_group);
-    bottom_splitter->setStretchFactor(0, 1);
-    bottom_splitter->setStretchFactor(1, 1);
-    bottom_splitter->setSizes({720, 520});
+    bottom_splitter->setStretchFactor(0, 2);
+    bottom_splitter->setStretchFactor(1, 3);
+    bottom_splitter->setSizes({480, 720});
     root_layout->addWidget(bottom_splitter, 1);
 }
 

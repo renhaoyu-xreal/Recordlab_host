@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cmath>
+#include <exception>
 #include <memory>
 #include <string>
 
@@ -335,11 +336,19 @@ SensorWorkspaceWidget::SensorWorkspaceWidget(QWidget* parent) : QWidget(parent) 
     curve_refresh_timer_ = new QTimer(this);
     curve_refresh_timer_->setInterval(16);
     connect(curve_refresh_timer_, &QTimer::timeout, this, [this]() {
-        if (!curve_dirty_) {
-            return;
+        try {
+            if (!curve_dirty_) {
+                return;
+            }
+            curve_dirty_ = false;
+            refreshSelectedCurves();
+        } catch (const std::exception& e) {
+            common::Logger::instance().log(common::LogLevel::Error, "SensorWorkspaceWidget",
+                                           std::string("curve refresh failed: ") + e.what());
+        } catch (...) {
+            common::Logger::instance().log(common::LogLevel::Error, "SensorWorkspaceWidget",
+                                           "curve refresh failed: unknown exception");
         }
-        curve_dirty_ = false;
-        refreshSelectedCurves();
     });
     curve_refresh_timer_->start();
 }
@@ -441,7 +450,10 @@ QWidget* SensorWorkspaceWidget::buildLeftPanel() {
     });
     connect(data_selection_list_, &QListWidget::currentItemChanged, this,
             [this](QListWidgetItem* current, QListWidgetItem*) {
-                updateSelectedDataFromItem(current);
+                try {
+                    updateSelectedDataFromItem(current);
+                } catch (...) {
+                }
             });
     data_layout->addWidget(data_selection_list_);
     layout->addWidget(data_group, 3);
@@ -458,7 +470,10 @@ QWidget* SensorWorkspaceWidget::buildLeftPanel() {
     });
     connect(custom_data_list_, &QListWidget::currentItemChanged, this,
             [this](QListWidgetItem* current, QListWidgetItem*) {
-                updateSelectedDataFromItem(current);
+                try {
+                    updateSelectedDataFromItem(current);
+                } catch (...) {
+                }
             });
     custom_layout->addWidget(custom_data_list_);
     layout->addWidget(custom_group, 2);
@@ -523,19 +538,23 @@ QWidget* SensorWorkspaceWidget::buildVideoPlaceholder(const QString& title, QLab
     auto* frame = new QFrame();
     frame->setFrameShape(QFrame::StyledPanel);
     frame->setStyleSheet(QStringLiteral(R"(
-        QFrame { background-color: #20242a; border: 1px solid #6d747d; }
-        QLabel { color: #e6ecf2; }
+        QFrame { background-color: #f7f4ec; border: 1px solid #b6b0a4; }
+        QLabel { color: #3b3832; }
     )"));
     auto* layout = new QVBoxLayout(frame);
-    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setContentsMargins(6, 6, 6, 6);
+    layout->setSpacing(5);
     image_label = new QLabel(title, frame);
     image_label->setAlignment(Qt::AlignCenter);
     image_label->setMinimumSize(220, 120);
     image_label->setStyleSheet(QStringLiteral(
-        "QLabel { background-color: #111418; color: #e6ecf2; font-size: 18px; font-weight: 600; }"));
+        "QLabel { background-color: #101214; color: #e9edf0; border: 1px solid #2c3135; font-size: 16px; font-weight: 600; }"));
     layout->addWidget(image_label, 1);
-    status_label = new QLabel(QStringLiteral("等待图像流"), frame);
+    status_label = new QLabel(QStringLiteral("%1 | 等待图像流 | -- x --").arg(title), frame);
     status_label->setAlignment(Qt::AlignCenter);
+    status_label->setMinimumHeight(24);
+    status_label->setStyleSheet(QStringLiteral(
+        "QLabel { background-color: #fffdf2; color: #504a40; border: 1px solid #c9c0ae; padding: 3px 6px; font-family: monospace; }"));
     layout->addWidget(status_label);
     return frame;
 }
@@ -740,6 +759,7 @@ void SensorWorkspaceWidget::updateVideoFrame(int camera_index, const nlohmann::j
 
     const QByteArray bytes = bytesFromJsonBinary(image_payload["data"]);
     const std::string encoding = image_payload.value("encoding", std::string{});
+    QString format_text = QString::fromStdString(encoding.empty() ? std::string("raw") : encoding);
     QImage frame;
     if (!encoding.empty()) {
         if (!frame.loadFromData(bytes, encoding == "jpeg" ? "JPG" : encoding.c_str())) {
@@ -756,8 +776,10 @@ void SensorWorkspaceWidget::updateVideoFrame(int camera_index, const nlohmann::j
         QImage::Format image_format = QImage::Format_Invalid;
         if (format_value == static_cast<int>(QImage::Format_Grayscale8) || bytes_per_line == width) {
             image_format = QImage::Format_Grayscale8;
+            format_text = QStringLiteral("gray8");
         } else if (format_value == static_cast<int>(QImage::Format_RGB888) || bytes_per_line >= width * 3) {
             image_format = QImage::Format_RGB888;
+            format_text = QStringLiteral("rgb888");
         }
         if (image_format == QImage::Format_Invalid) {
             setVideoStatus(camera_index, QStringLiteral("图像格式不支持"), true);
@@ -779,7 +801,11 @@ void SensorWorkspaceWidget::updateVideoFrame(int camera_index, const nlohmann::j
 
     image_label->setPixmap(QPixmap::fromImage(frame).scaled(
         image_label->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
-    setVideoStatus(camera_index, QStringLiteral("cam %1 | %2 x %3").arg(camera_index).arg(width).arg(height));
+    setVideoStatus(camera_index, QStringLiteral("cam %1 | %2 x %3 | %4")
+        .arg(camera_index)
+        .arg(width)
+        .arg(height)
+        .arg(format_text));
 
     static std::array<std::chrono::steady_clock::time_point, 2> last_debug_log{};
     const auto now = std::chrono::steady_clock::now();
@@ -851,7 +877,7 @@ void SensorWorkspaceWidget::updateVideoFrameFromSharedMemory(int camera_index, c
 
     image_label->setPixmap(QPixmap::fromImage(image).scaled(
         image_label->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
-    setVideoStatus(camera_index, QStringLiteral("cam %1 | %2 x %3 | shm %4")
+    setVideoStatus(camera_index, QStringLiteral("cam %1 | %2 x %3 | shm seq %4")
         .arg(camera_index)
         .arg(frame.width)
         .arg(frame.height)

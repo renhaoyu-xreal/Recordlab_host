@@ -6,6 +6,8 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QAbstractItemView>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QLabel>
 #include <QListWidget>
 #include <QPlainTextEdit>
@@ -88,18 +90,13 @@ ScriptPage::ScriptPage(QWidget* parent) : QWidget(parent) {
     script_layout->addWidget(script_list_);
     right_layout->addWidget(script_group, 2);
 
-    auto* select_row = new QHBoxLayout();
-    auto* refresh_button = new QPushButton(QStringLiteral("刷新脚本"), right_pane);
-    refresh_button->setObjectName(QStringLiteral("refresh_scripts_button"));
-    refresh_button->setMinimumHeight(40);
-    refresh_button->setStyleSheet(QStringLiteral("QPushButton { background-color: #90ee90; border: 2px solid #006400; border-radius: 5px; }"));
-    auto* clear_button = new QPushButton(QStringLiteral("取消选择"), right_pane);
-    clear_button->setObjectName(QStringLiteral("clear_scripts_button"));
-    clear_button->setMinimumHeight(40);
-    clear_button->setStyleSheet(QStringLiteral("QPushButton { background-color: #ffb6c1; border: 2px solid #8b0000; border-radius: 5px; }"));
-    select_row->addWidget(refresh_button, 1);
-    select_row->addWidget(clear_button, 1);
-    right_layout->addLayout(select_row);
+    auto* import_button = new QPushButton(QStringLiteral("导入新脚本"), right_pane);
+    import_button->setObjectName(QStringLiteral("import_script_button"));
+    import_button->setMinimumHeight(40);
+    import_button->setStyleSheet(QStringLiteral(
+        "QPushButton { background-color: #e8e4dc; border: 1px solid #9f9788; border-radius: 4px; font-weight: 600; }"
+        "QPushButton:hover { background-color: #fffdf2; }"));
+    right_layout->addWidget(import_button);
 
     auto* run_row = new QHBoxLayout();
     auto* run_button = new QPushButton(QStringLiteral("开始执行"), right_pane);
@@ -118,7 +115,25 @@ ScriptPage::ScriptPage(QWidget* parent) : QWidget(parent) {
         emit runScriptRequested(scripts.isEmpty() ? QString{} : scripts.first());
     });
     connect(stop_button, &QPushButton::clicked, this, &ScriptPage::stopScriptRequested);
-    connect(clear_button, &QPushButton::clicked, script_list_, &QListWidget::clearSelection);
+    connect(import_button, &QPushButton::clicked, this, [this]() {
+        const QString script_path = QFileDialog::getOpenFileName(
+            this,
+            QStringLiteral("导入新脚本"),
+            QString{},
+            QStringLiteral("Python 脚本 (*.py);;所有文件 (*)"));
+        if (script_path.trimmed().isEmpty()) {
+            return;
+        }
+        const QFileInfo info(script_path);
+        const QString normalized = info.exists() ? info.absoluteFilePath() : script_path;
+        const auto matches = script_list_->findItems(normalized, Qt::MatchExactly);
+        if (matches.isEmpty()) {
+            script_list_->addItem(normalized);
+            script_list_->setCurrentRow(script_list_->count() - 1);
+        } else {
+            script_list_->setCurrentItem(matches.first());
+        }
+    });
 
     right_layout->addStretch(1);
 
@@ -129,6 +144,7 @@ ScriptPage::ScriptPage(QWidget* parent) : QWidget(parent) {
     root_layout->addWidget(top_splitter, 4);
 
     auto* bottom_splitter = new QSplitter(Qt::Horizontal, this);
+    bottom_splitter->setObjectName(QStringLiteral("script_bottom_splitter"));
     bottom_splitter->setChildrenCollapsible(false);
 
     auto* log_group = new QGroupBox(QStringLiteral("执行日志"), bottom_splitter);
@@ -144,6 +160,10 @@ ScriptPage::ScriptPage(QWidget* parent) : QWidget(parent) {
 
     output_tabs_ = new QTabWidget(bottom_splitter);
     output_tabs_->setObjectName(QStringLiteral("script_output_tabs"));
+    output_tabs_->setStyleSheet(QStringLiteral(
+        "QTabWidget::pane { border: 1px solid #b6b0a4; background: #f4f1ea; }"
+        "QTabBar::tab { min-height: 20px; padding: 3px 10px; background: #e8e4dc; border: 1px solid #b6b0a4; }"
+        "QTabBar::tab:selected { background: #fffdf2; font-weight: 600; }"));
     auto* data_output = new DataOutputDirectoryWidget(QStringLiteral("third_party/Recordlab_nodes/data"), output_tabs_);
     data_output->setObjectName(QStringLiteral("script_data_output_widget"));
     connect(data_output, &DataOutputDirectoryWidget::messageReady, this, [this](const QString& message) {
@@ -156,9 +176,9 @@ ScriptPage::ScriptPage(QWidget* parent) : QWidget(parent) {
             });
     output_tabs_->addTab(buildWorkflowPanel(), QStringLiteral("流程状态"));
     bottom_splitter->addWidget(output_tabs_);
-    bottom_splitter->setStretchFactor(0, 1);
-    bottom_splitter->setStretchFactor(1, 1);
-    bottom_splitter->setSizes({720, 520});
+    bottom_splitter->setStretchFactor(0, 2);
+    bottom_splitter->setStretchFactor(1, 3);
+    bottom_splitter->setSizes({480, 720});
     root_layout->addWidget(bottom_splitter, 1);
 }
 

@@ -58,6 +58,7 @@ private:
     void loadAgents();
     void handleUIMessage(const HostMessage& msg);
     void appendLog(const QString& message);
+    void reportQtException(const QString& context, const std::exception* error = nullptr);
 
     // ── Paths / config ─────────────────────────────────────────
     std::string agents_config_path_;

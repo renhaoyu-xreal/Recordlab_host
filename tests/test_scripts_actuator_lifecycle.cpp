@@ -37,6 +37,7 @@ int main(int argc, char** argv) {
     {
         std::ofstream out(script);
         out << "print('script lifecycle hello', flush=True)\n";
+        out << "print('__RECORDLAB_EVENT__ {\"type\":\"workflow\",\"title\":\"demo\",\"message\":\"running\",\"steps\":[{\"label\":\"check\",\"status\":\"running\"}]}', flush=True)\n";
         out << "import sys\n";
         out << "print('script lifecycle error', file=sys.stderr, flush=True)\n";
     }
@@ -48,6 +49,7 @@ int main(int argc, char** argv) {
     bool saw_finished = false;
     bool saw_stdout = false;
     bool saw_stderr = false;
+    bool saw_workflow = false;
     int exit_code = -1;
     std::string script_id;
 
@@ -106,6 +108,15 @@ int main(int argc, char** argv) {
                     require(msg.payload.value("script_path", std::string{}) == script.string(),
                             "script_finished should include script_path");
                     require(msg.payload.value("pid", 0) > 0, "script_finished should include pid");
+                } else if (msg.type == recordlab::host::msg::SCRIPT_WORKFLOW) {
+                    if (msg.payload.value("action", std::string{}) == "clear") {
+                        continue;
+                    }
+                    saw_workflow = true;
+                    require(msg.payload.value("title", std::string{}) == "demo",
+                            "workflow event should retain title");
+                    require(msg.payload.value("steps_json", std::string{}).find("\"check\"") != std::string::npos,
+                            "workflow event should include serialized steps");
                 }
             }
             QThread::msleep(10);
@@ -116,6 +127,7 @@ int main(int argc, char** argv) {
     require(saw_started, "script_started missing");
     require(saw_stdout, "script stdout missing");
     require(saw_stderr, "script stderr missing");
+    require(saw_workflow, "script workflow event missing");
     require(saw_finished, "script_finished missing");
     require(exit_code == 0, "script should exit successfully");
 

@@ -24,7 +24,7 @@ WorkspacePage::WorkspacePage(QWidget* parent) : QWidget(parent) {
     setStyleSheet(QStringLiteral(R"(
         WorkspacePage { background: #f4f1ea; }
         QTabWidget::pane { border: 1px solid #b6b0a4; background: #f4f1ea; }
-        QTabBar::tab { min-width: 130px; padding: 8px 16px; background: #e8e4dc; border: 1px solid #b6b0a4; }
+        QTabBar::tab { min-width: 118px; min-height: 22px; padding: 4px 12px; background: #e8e4dc; border: 1px solid #b6b0a4; }
         QTabBar::tab:selected { background: #fffdf2; font-weight: 600; }
         QGroupBox { font-weight: 600; border: 1px solid #aaa; margin-top: 8px; padding-top: 8px; }
         QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
@@ -107,21 +107,33 @@ void WorkspacePage::bindMainWindow(MainWindow* mainWindow) {
 
     // MainWindow signals → UI
     connect(main_window_, &MainWindow::logMessage, this, [this](const QString& message) {
-        if (!message.trimmed().isEmpty()) {
-            script_page_->logView()->appendPlainText(message);
-            data_page_->logView()->appendPlainText(message);
+        try {
+            if (!message.trimmed().isEmpty()) {
+                script_page_->logView()->appendPlainText(message);
+                data_page_->logView()->appendPlainText(message);
+            }
+        } catch (...) {
         }
     });
     connect(main_window_, &MainWindow::watchdogStateChanged, this, [this](const QString& state) {
-        watchdog_value_label_->setText(active_agent_.isEmpty()
-            ? QStringLiteral("Watchdog: %1").arg(state)
-            : QStringLiteral("Watchdog: 当前 Agent: %1 | %2").arg(active_agent_, state));
+        try {
+            watchdog_value_label_->setText(active_agent_.isEmpty()
+                ? QStringLiteral("Watchdog: %1").arg(state)
+                : QStringLiteral("Watchdog: 当前 Agent: %1 | %2").arg(active_agent_, state));
+        } catch (...) {
+        }
     });
     connect(main_window_, &MainWindow::recordTimerChanged, this, [this](double seconds) {
-        timer_value_label_->setText(QStringLiteral("录制时长: %1 s").arg(seconds, 0, 'f', 1));
+        try {
+            timer_value_label_->setText(QStringLiteral("录制时长: %1 s").arg(seconds, 0, 'f', 1));
+        } catch (...) {
+        }
     });
     connect(main_window_, &MainWindow::timeDelayChanged, this, [this](double milliseconds) {
-        delay_value_label_->setText(QStringLiteral("时间延迟: %1 ms").arg(milliseconds, 0, 'f', 1));
+        try {
+            delay_value_label_->setText(QStringLiteral("时间延迟: %1 ms").arg(milliseconds, 0, 'f', 1));
+        } catch (...) {
+        }
     });
 }
 

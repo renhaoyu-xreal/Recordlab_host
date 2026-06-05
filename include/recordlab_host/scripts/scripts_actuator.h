@@ -38,6 +38,7 @@ private:
     void handleWorkflowEvent(const nlohmann::json& event);
     void sendRuntimeResponse(const nlohmann::json& response);
     void publishToUI(const std::string& type, nlohmann::json payload);
+    void reportException(const char* context, const std::exception* error = nullptr);
 
     HostMessageBus& bus_;
     QString nodes_root_;

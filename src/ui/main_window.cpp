@@ -70,7 +70,15 @@ MainWindow::MainWindow(std::string agents_config_path,
     // ── Bus poll timer (~60 Hz) ────────────────────────────────
     bus_poll_timer_ = new QTimer(this);
     bus_poll_timer_->setInterval(16);
-    connect(bus_poll_timer_, &QTimer::timeout, this, &MainWindow::pollBusMessages);
+    connect(bus_poll_timer_, &QTimer::timeout, this, [this]() {
+        try {
+            pollBusMessages();
+        } catch (const std::exception& e) {
+            reportQtException(QStringLiteral("pollBusMessages"), &e);
+        } catch (...) {
+            reportQtException(QStringLiteral("pollBusMessages"));
+        }
+    });
     bus_poll_timer_->start();
 
     // ── UI ─────────────────────────────────────────────────────
@@ -85,18 +93,30 @@ MainWindow::MainWindow(std::string agents_config_path,
     setCentralWidget(stack_);
 
     connect(entry_page_, &EntryPage::agentSelected, this, [this](const QString& agent_name) {
-        workspace_page_->activateAgent(agent_name);
-        QStringList scripts;
-        for (const auto& script : agent_manager_->loadAgentConfig(agent_name.toStdString()).default_scripts) {
-            scripts << QString::fromStdString(script);
+        try {
+            workspace_page_->activateAgent(agent_name);
+            QStringList scripts;
+            for (const auto& script : agent_manager_->loadAgentConfig(agent_name.toStdString()).default_scripts) {
+                scripts << QString::fromStdString(script);
+            }
+            workspace_page_->scriptPage()->setScripts(scripts);
+            stack_->setCurrentWidget(workspace_page_);
+            showMaximized();
+            this->activateAgent(agent_name);
+        } catch (const std::exception& e) {
+            reportQtException(QStringLiteral("agentSelected"), &e);
+        } catch (...) {
+            reportQtException(QStringLiteral("agentSelected"));
         }
-        workspace_page_->scriptPage()->setScripts(scripts);
-        stack_->setCurrentWidget(workspace_page_);
-        showMaximized();
-        this->activateAgent(agent_name);
     });
     connect(workspace_page_, &WorkspacePage::backRequested, this, [this]() {
-        stack_->setCurrentWidget(entry_page_);
+        try {
+            stack_->setCurrentWidget(entry_page_);
+        } catch (const std::exception& e) {
+            reportQtException(QStringLiteral("backRequested"), &e);
+        } catch (...) {
+            reportQtException(QStringLiteral("backRequested"));
+        }
     });
 
     loadAgents();
@@ -118,8 +138,15 @@ WorkspacePage* MainWindow::workspacePage() const {
 
 void MainWindow::pollBusMessages() {
     auto messages = bus_.drainFor(msg::UI);
-    for (const auto& m : messages)
-        handleUIMessage(m);
+    for (const auto& m : messages) {
+        try {
+            handleUIMessage(m);
+        } catch (const std::exception& e) {
+            reportQtException(QStringLiteral("handleUIMessage/%1").arg(QString::fromStdString(m.type)), &e);
+        } catch (...) {
+            reportQtException(QStringLiteral("handleUIMessage/%1").arg(QString::fromStdString(m.type)));
+        }
+    }
 }
 
 void MainWindow::handleUIMessage(const HostMessage& m) {
@@ -235,65 +262,97 @@ void MainWindow::appendLog(const QString& message) {
 // ── Slots ──────────────────────────────────────────────────────
 
 void MainWindow::activateAgent(const QString& agent_name) {
-    if (watchdog_) watchdog_->clearActiveAgent();
-    active_agent_ = agent_name;
-    bus_.publish({
-        .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::ACTIVATE_AGENT,
-        .payload = {{"agent_name", agent_name.toStdString()}},
-    });
-    // Watchdog is already running; it binds to this agent after AGENT_ACTIVATED success.
+    try {
+        if (watchdog_) watchdog_->clearActiveAgent();
+        active_agent_ = agent_name;
+        bus_.publish({
+            .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::ACTIVATE_AGENT,
+            .payload = {{"agent_name", agent_name.toStdString()}},
+        });
+        // Watchdog is already running; it binds to this agent after AGENT_ACTIVATED success.
+    } catch (const std::exception& e) {
+        reportQtException(QStringLiteral("activateAgent"), &e);
+    } catch (...) {
+        reportQtException(QStringLiteral("activateAgent"));
+    }
 }
 
 void MainWindow::sendCommand(const QString& cmd, const QString& params_json) {
-    nlohmann::json params;
-    const auto trimmed = params_json.trimmed();
-    if (trimmed.isEmpty()) {
-        params = nlohmann::json::object();
-    } else {
-        params = nlohmann::json::parse(trimmed.toStdString(), nullptr, false);
-        if (params.is_discarded() || !params.is_object()) {
-            emit commandFinished(cmd, false, QStringLiteral("命令参数必须是 JSON object"));
-            return;
+    try {
+        nlohmann::json params;
+        const auto trimmed = params_json.trimmed();
+        if (trimmed.isEmpty()) {
+            params = nlohmann::json::object();
+        } else {
+            params = nlohmann::json::parse(trimmed.toStdString(), nullptr, false);
+            if (params.is_discarded() || !params.is_object()) {
+                emit commandFinished(cmd, false, QStringLiteral("命令参数必须是 JSON object"));
+                return;
+            }
         }
+        const QString request_id = QStringLiteral("ui_%1")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+        bus_.publish({
+            .request_id = request_id.toStdString(),
+            .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::CMD_REQUEST,
+            .payload = {
+                {"request_id", request_id.toStdString()},
+                {"agent_name", active_agent_.toStdString()},
+                {"cmd", cmd.toStdString()},
+                {"params", params},
+                {"priority", "normal"},
+                {"silent", false},
+            },
+        });
+    } catch (const std::exception& e) {
+        reportQtException(QStringLiteral("sendCommand"), &e);
+        emit commandFinished(cmd, false, QStringLiteral("命令发送失败: %1").arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        reportQtException(QStringLiteral("sendCommand"));
+        emit commandFinished(cmd, false, QStringLiteral("命令发送失败: unknown exception"));
     }
-    const QString request_id = QStringLiteral("ui_%1")
-        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
-    bus_.publish({
-        .request_id = request_id.toStdString(),
-        .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::CMD_REQUEST,
-        .payload = {
-            {"request_id", request_id.toStdString()},
-            {"agent_name", active_agent_.toStdString()},
-            {"cmd", cmd.toStdString()},
-            {"params", params},
-            {"priority", "normal"},
-            {"silent", false},
-        },
-    });
 }
 
 void MainWindow::runScript(const QString& script_path) {
-    bus_.publish({
-        .source = msg::UI, .target = msg::SCRIPTS_ACTUATOR, .type = msg::RUN_SCRIPT,
-        .payload = {{"script_path", script_path.trimmed().toStdString()}, {"agent_name", active_agent_.toStdString()}},
-    });
+    try {
+        bus_.publish({
+            .source = msg::UI, .target = msg::SCRIPTS_ACTUATOR, .type = msg::RUN_SCRIPT,
+            .payload = {{"script_path", script_path.trimmed().toStdString()}, {"agent_name", active_agent_.toStdString()}},
+        });
+    } catch (const std::exception& e) {
+        reportQtException(QStringLiteral("runScript"), &e);
+    } catch (...) {
+        reportQtException(QStringLiteral("runScript"));
+    }
 }
 
 void MainWindow::stopScript() {
-    bus_.publish({
-        .source = msg::UI, .target = msg::SCRIPTS_ACTUATOR, .type = msg::STOP_SCRIPT,
-    });
+    try {
+        bus_.publish({
+            .source = msg::UI, .target = msg::SCRIPTS_ACTUATOR, .type = msg::STOP_SCRIPT,
+        });
+    } catch (const std::exception& e) {
+        reportQtException(QStringLiteral("stopScript"), &e);
+    } catch (...) {
+        reportQtException(QStringLiteral("stopScript"));
+    }
 }
 
 void MainWindow::shutdown() {
-    if (watchdog_) {
-        watchdog_->stop();
-        watchdog_.reset();
+    try {
+        if (watchdog_) {
+            watchdog_->stop();
+            watchdog_.reset();
+        }
+        scripts_actuator_.reset();
+        data_receiver_.reset();
+        if (agent_manager_) agent_manager_->stop();
+        agent_manager_.reset();
+    } catch (const std::exception& e) {
+        reportQtException(QStringLiteral("shutdown"), &e);
+    } catch (...) {
+        reportQtException(QStringLiteral("shutdown"));
     }
-    scripts_actuator_.reset();
-    data_receiver_.reset();
-    if (agent_manager_) agent_manager_->stop();
-    agent_manager_.reset();
 }
 
 // ── Agent loading ─────────────────────────────────────────────
@@ -310,6 +369,19 @@ void MainWindow::loadAgents() {
         entry_page_->setAgents({});
         entry_page_->summaryLabel()->setText(QStringLiteral("配置读取失败: %1").arg(QString::fromUtf8(e.what())));
         entry_page_->summaryLabel()->show();
+    }
+}
+
+void MainWindow::reportQtException(const QString& context, const std::exception* error) {
+    const QString detail = error ? QString::fromUtf8(error->what()) : QStringLiteral("unknown exception");
+    const QString message = QStringLiteral("Qt 回调内部异常(%1): %2").arg(context, detail);
+    try {
+        appendLog(message);
+    } catch (...) {
+    }
+    try {
+        common::Logger::instance().log(common::LogLevel::Error, "UI", message.toStdString());
+    } catch (...) {
     }
 }
 

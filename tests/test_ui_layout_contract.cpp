@@ -13,6 +13,7 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSplitter>
 #include <QTabWidget>
 #include <nlohmann/json.hpp>
 
@@ -79,6 +80,19 @@ int main(int argc, char** argv) {
     auto* script_output_tabs = workspace->scriptPage()->findChild<QTabWidget*>("script_output_tabs");
     require(script_output_tabs != nullptr, "script output tabs missing");
     require(script_output_tabs->tabText(0).startsWith(QStringLiteral("data输出目录：")), "script data tab should include output path");
+    require(workspace->scriptPage()->findChild<QPushButton*>("import_script_button") != nullptr,
+            "script import button missing");
+    require(workspace->scriptPage()->findChild<QPushButton*>("refresh_scripts_button") == nullptr,
+            "refresh scripts button should be removed");
+    require(workspace->scriptPage()->findChild<QPushButton*>("clear_scripts_button") == nullptr,
+            "clear scripts button should be removed");
+    auto* script_bottom_splitter = workspace->scriptPage()->findChild<QSplitter*>("script_bottom_splitter");
+    require(script_bottom_splitter != nullptr, "script bottom splitter missing");
+    const auto script_sizes = script_bottom_splitter->sizes();
+    require(script_sizes.size() == 2 && script_sizes[0] > 0 && script_sizes[1] > 0,
+            "script bottom splitter should expose two visible panes");
+    require(script_sizes[0] * 5 <= (script_sizes[0] + script_sizes[1]) * 3,
+            "script log should default to no more than 2/5 width");
     auto* command_data_group = workspace->dataPage()->findChild<QGroupBox*>("command_data_output_group");
     require(command_data_group != nullptr, "command data output group missing");
     require(command_data_group->title().startsWith(QStringLiteral("data输出目录：")), "command data group should include output path");

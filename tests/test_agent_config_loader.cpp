@@ -49,6 +49,14 @@ int main() {
         }
     }
     assert(has_camera);
+    auto helen = loader.loadAgent("helen_node");
+    assert(helen.name == "helen_node");
+    assert(helen.node_class.find("HelenMainNode") != std::string::npos);
+    assert(helen.goal_port == 5696);
+    assert(helen.data_port == 16536);
+    assert(!helen.default_scripts.empty());
+    assert(helen.init_device_params.value("allow_ssh_reboot", true) == false);
+    assert(helen.custom_params.value("persist_ssh_artifacts", true) == false);
 
     const auto tmp = hostRoot() / "build" / "test_agent_config_loader_tmp.json";
     {
