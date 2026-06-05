@@ -100,6 +100,10 @@ int main(int argc, char** argv) {
     require(script_workspace->dataSelectionList()->item(0)->text() == QStringLiteral("IMU0-gyro [--Hz]"), "imu0 gyro initial rate should be unknown");
     require(script_workspace->dataSelectionList()->item(3)->text() == QStringLiteral("IMU0-temperature [--Hz]"), "imu0 temperature initial rate should be unknown");
     require(script_workspace->dataSelectionList()->item(6)->text() == QStringLiteral("IMU1-temperature [--Hz]"), "imu1 temperature initial rate should be unknown");
+    require(script_workspace->realtimeValueView()->toPlainText().split('\n').size() == script_workspace->dataSelectionList()->count(),
+            "realtime values should mirror data selection count");
+    require(script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("IMU1-temperature")),
+            "realtime values should include every imu row initially");
 
     script_workspace->handleRealtimeData(QStringLiteral("imu_data"), nlohmann::json{
         {"type", 1},
@@ -108,7 +112,19 @@ int main(int argc, char** argv) {
     require(script_workspace->dataSelectionList()->item(0)->text() == QStringLiteral("IMU0-gyro [1000Hz]"), "imu0 gyro live rate missing");
     require(!script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("Hz")), "realtime values should not display hz");
     require(script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("IMU0-gyro")), "realtime imu label missing");
+    require(script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("IMU0-acc x:-- y:-- z:--")),
+            "realtime update should not remove other imu rows");
     require(curve_group->title() == QStringLiteral("传感器数据曲线: 未选择数据"), "realtime data should not change selected data");
+
+    script_workspace->handleRealtimeData(QStringLiteral("imu_data"), nlohmann::json{
+        {"type", 2},
+        {"data", {4.0, 5.0, 6.0, 0.0, 0.0, 0.0}},
+    }, 500.0);
+    require(script_workspace->dataSelectionList()->item(1)->text() == QStringLiteral("IMU0-acc [500Hz]"), "imu0 acc live rate missing");
+    require(script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("IMU0-gyro type:1 x:1.000 y:2.000 z:3.000")),
+            "realtime values should retain gyro latest value");
+    require(script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("IMU0-acc type:2 x:4.000 y:5.000 z:6.000")),
+            "realtime values should show acc latest value");
 
     script_workspace->dataSelectionList()->setCurrentRow(0);
     QApplication::processEvents();

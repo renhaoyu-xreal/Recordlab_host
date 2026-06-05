@@ -35,11 +35,7 @@ void Watchdog::start() {
     consecutive_failures_ = 0;
     init_failures_ = 0;
     last_reason_ = "startup";
-    if (hasActiveAgent()) {
-        state_ = AgentHealthState::INITIALIZING;
-    } else {
-        state_ = AgentHealthState::DISCONNECTED;
-    }
+    state_ = AgentHealthState::DISCONNECTED;
     worker_ = std::thread(&Watchdog::workerLoop, this);
 }
 
@@ -61,7 +57,7 @@ void Watchdog::setActiveAgent(std::string agent_name) {
     consecutive_failures_ = 0;
     init_failures_ = 0;
     last_reason_ = "agent_activated";
-    state_ = AgentHealthState::INITIALIZING;
+    state_ = AgentHealthState::DISCONNECTED;
 }
 
 void Watchdog::clearActiveAgent() {
@@ -135,6 +131,9 @@ void Watchdog::workerLoop() {
         }
         state_ = next;
         publishState(next);
+        if (next != current && next == AgentHealthState::ERROR) {
+            publishErrorNotification();
+        }
 
         int interval = kCheckIntervalDisconnectedMs;
         if (next == AgentHealthState::HEALTHY) {
@@ -328,6 +327,22 @@ void Watchdog::publishState(AgentHealthState state, const nlohmann::json& extra)
         .target = msg::UI,
         .type = msg::WATCHDOG_STATE,
         .payload = std::move(payload),
+    });
+}
+
+void Watchdog::publishErrorNotification() {
+    bus_.publish({
+        .source = msg::WATCHDOG,
+        .target = msg::UI,
+        .type = msg::USER_NOTIFICATION,
+        .payload = {
+            {"severity", "critical"},
+            {"title", "眼镜状态异常"},
+            {"message", "眼镜可能已经过热，或在软件启动前已经处于运行状态，软件无法读取固件FSN、完成启动配置。\n\n请拔出眼镜，等待 Watchdog 状态进入 DISCONNECTED 后，再重新插上眼镜。"},
+            {"agent_name", activeAgent()},
+            {"state", "ERROR"},
+            {"reason", last_reason_},
+        },
     });
 }
 

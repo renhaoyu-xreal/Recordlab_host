@@ -58,6 +58,7 @@ private:
         std::size_t publish_count = 0;
         std::unordered_map<std::string, std::deque<double>> stream_receive_times;
         std::unordered_map<std::string, double> stream_frequencies_hz;
+        std::unordered_map<std::string, std::chrono::steady_clock::time_point> stream_last_ui_publish;
     };
 
     void onTopicData(const std::string& topic_name, const nlohmann::json& value);

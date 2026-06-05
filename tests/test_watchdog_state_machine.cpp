@@ -109,9 +109,10 @@ int main() {
     runScenario(
         "healthy_agent",
         [](HostMessageBus& bus, std::atomic<bool>& running) {
-            replySequence(bus, running, {true});
+            replySequence(bus, running, {true, true});
         },
         [](HostMessageBus& bus) {
+            waitForState(bus, "DISCONNECTED");
             waitForState(bus, "INITIALIZING");
             waitForState(bus, "HEALTHY");
         });
@@ -119,7 +120,7 @@ int main() {
     runScenario(
         "error_agent",
         [](HostMessageBus& bus, std::atomic<bool>& running) {
-            replySequence(bus, running, {false, true, false, true, false, true});
+            replySequence(bus, running, {true, false, true, false, true, false, true});
         },
         [](HostMessageBus& bus) {
             waitForState(bus, "INITIALIZING");
@@ -130,7 +131,7 @@ int main() {
     runScenario(
         "disconnect_after_error",
         [](HostMessageBus& bus, std::atomic<bool>& running) {
-            replySequence(bus, running, {false, true, false, true, false, false});
+            replySequence(bus, running, {true, false, true, false, true, false, false});
         },
         [](HostMessageBus& bus) {
             waitForState(bus, "INITIALIZING");
@@ -141,7 +142,7 @@ int main() {
     runScenario(
         "request_match_agent",
         [](HostMessageBus& bus, std::atomic<bool>& running) {
-            replySequence(bus, running, {true}, true);
+            replySequence(bus, running, {true, true}, true);
         },
         [](HostMessageBus& bus) {
             waitForState(bus, "INITIALIZING");

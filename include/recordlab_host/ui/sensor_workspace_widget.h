@@ -44,6 +44,8 @@ private:
     void updateFrequencyLabels(const QString& data_name, const nlohmann::json& value, double frequency);
     void updateSelectedDataFromItem(QListWidgetItem* item);
     void appendCurveSample(const QString& key, const nlohmann::json& value);
+    void updateRealtimeValueLine(const QString& label, const QString& value_text);
+    void renderRealtimeValues();
     void requestCurveRefresh();
     void refreshSelectedCurves();
     void handleCameraData(const nlohmann::json& value);
@@ -65,6 +67,7 @@ private:
     std::array<QLabel*, 2> video_status_labels_{};
     SensorCurveWidget* curve_widget_ = nullptr;
     std::map<QString, std::deque<std::array<double, 4>>> curve_history_;
+    std::map<QString, QString> realtime_value_lines_;
     QTimer* curve_refresh_timer_ = nullptr;
     bool curve_dirty_ = false;
 };

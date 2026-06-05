@@ -26,6 +26,7 @@ constexpr const char* ESTOP           = "estop";              // payload: {agent
 constexpr const char* AGENT_ACTIVATED = "agent_activated";   // payload: {agent_name, success, message}
 constexpr const char* WATCHDOG_STATE  = "watchdog_state";    // payload: {agent_name, state, reason, consecutive_failures}
 constexpr const char* LOG_ENTRY       = "log_entry";         // payload: {message}
+constexpr const char* USER_NOTIFICATION = "user_notification"; // payload: {title, message, severity}
 
 // ── UI → ScriptsActuator ───────────────────────────────────────
 constexpr const char* RUN_SCRIPT      = "run_script";        // payload: {script_path, agent_name}

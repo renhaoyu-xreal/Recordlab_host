@@ -91,6 +91,7 @@ enable_testing()
 foreach(test_name
   test_agent_config_loader
   test_agent_manager_proxy_integration
+  test_data_receiver_streams
   test_echo_topic_encoding
   test_host_message_bus
   test_logger_context

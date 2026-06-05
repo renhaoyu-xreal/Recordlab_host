@@ -43,6 +43,11 @@ int main() {
         watchdog.start();
         watchdog.setActiveAgent("agent");
 
+        auto check = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
+        assert(check.payload.value("agent_name", "") == "agent");
+        assert(check.payload.value("cmd", "") == "check");
+        publishResult(bus, "check", true);
+
         auto first = waitForType(bus, msg::AGENT_MANAGER, msg::INIT_DEVICE);
         assert(first.payload.value("agent_name", "") == "agent");
         publishResult(bus, "init_device", true);
@@ -72,6 +77,10 @@ int main() {
         watchdog.start();
         watchdog.setActiveAgent("agent");
 
+        auto first_check = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
+        assert(first_check.payload.value("cmd", "") == "check");
+        publishResult(bus, "check", true);
+
         for (int attempt = 0; attempt < 3; ++attempt) {
             auto init = waitForType(bus, msg::AGENT_MANAGER, msg::INIT_DEVICE);
             assert(init.payload.value("agent_name", "") == "agent");
@@ -92,6 +101,10 @@ int main() {
             }
         }
         assert(saw_error);
+
+        auto notification = waitForType(bus, msg::UI, msg::USER_NOTIFICATION);
+        assert(notification.payload.value("severity", "") == "critical");
+        assert(notification.payload.value("message", "").find("拔出眼镜") != std::string::npos);
 
         auto healthy_check = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST, 4000);
         assert(healthy_check.payload.value("cmd", "") == "check");

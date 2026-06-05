@@ -22,7 +22,7 @@ public:
     /// Interval between check attempts when DISCONNECTED (ms).
     static constexpr int kCheckIntervalDisconnectedMs = 2000;
     /// Interval between checks when HEALTHY (ms).
-    static constexpr int kCheckIntervalHealthyMs = 6000;
+    static constexpr int kCheckIntervalHealthyMs = 3000;
     /// Maximum init recovery attempts before staying ERROR.
     static constexpr int kMaxInitRetries = 2;
 
@@ -39,7 +39,7 @@ public:
     /// Quick health query without blocking.
     AgentHealthState state() const;
 
-    /// Bind the watchdog to an activated agent and start initialization.
+    /// Bind the watchdog to an activated agent and start connectivity checks.
     void setActiveAgent(std::string agent_name);
 
     /// Stop monitoring the active agent without stopping the thread.
@@ -56,6 +56,7 @@ private:
     std::string activeAgent() const;
     bool hasActiveAgent() const;
     void publishState(AgentHealthState state, const nlohmann::json& extra = nlohmann::json::object());
+    void publishErrorNotification();
     std::optional<HostMessage> waitForResult(const std::string& request_id,
                                              const std::string& cmd,
                                              int timeout_ms);

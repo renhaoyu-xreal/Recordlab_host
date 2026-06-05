@@ -12,6 +12,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QUuid>
@@ -156,6 +157,19 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
     }
     if (m.type == msg::WATCHDOG_STATE) {
         emit watchdogStateChanged(QString::fromStdString(m.payload.value("state", "")));
+        return;
+    }
+    if (m.type == msg::USER_NOTIFICATION) {
+        const QString title = QString::fromStdString(m.payload.value("title", std::string("RecordLab 提示")));
+        const QString message = QString::fromStdString(m.payload.value("message", std::string{}));
+        const QString severity = QString::fromStdString(m.payload.value("severity", std::string("info")));
+        if (severity == QStringLiteral("critical") || severity == QStringLiteral("error")) {
+            QMessageBox::critical(this, title, message);
+        } else if (severity == QStringLiteral("warning")) {
+            QMessageBox::warning(this, title, message);
+        } else {
+            QMessageBox::information(this, title, message);
+        }
         return;
     }
     if (m.type == msg::AGENT_ACTIVATED) {

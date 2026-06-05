@@ -166,6 +166,7 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
     double frequency_hz = 0.0;
     bool should_publish = false;
     bool is_first = false;
+    std::string stream_key;
     nlohmann::json stream_frequencies = nlohmann::json::object();
 
     {
@@ -183,16 +184,19 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
                 frequency_hz = 1.0 / delta;
             }
         }
-        is_first = state.first_message;
+        const bool topic_first = state.first_message;
         state.first_message = false;
         state.last_receive = now;
 
-        const std::string stream_key = streamKeyFor(topic_name, value);
+        stream_key = streamKeyFor(topic_name, value);
         const double stream_ts = streamTimestampFor(topic_name, value, now);
         auto& times = state.stream_receive_times[stream_key];
+        is_first = topic_first || times.empty();
         if (!times.empty() && stream_ts < times.back() - 1.0) {
             times.clear();
             state.stream_frequencies_hz[stream_key] = 0.0;
+            state.stream_last_ui_publish.erase(stream_key);
+            is_first = true;
         }
         if (times.empty() || std::abs(stream_ts - times.back()) >= 1e-6) {
             times.push_back(stream_ts);
@@ -214,15 +218,21 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
         frequency_hz = state.stream_frequencies_hz[stream_key];
         stream_frequencies = frequenciesToJson(state.stream_frequencies_hz);
 
-        // UI rate-limiting.
+        // UI rate-limiting is per logical stream. A single ROS-style topic can
+        // multiplex IMU0/IMU1 substreams by type, and those must not suppress
+        // each other's UI updates.
         if (state.ui_max_hz <= 0.0) {
             should_publish = true;
         } else {
             const double min_interval = 1.0 / state.ui_max_hz;
-            const double elapsed = std::chrono::duration<double>(now - state.last_ui_publish).count();
-            if (elapsed >= min_interval || is_first) {
+            auto last_publish_it = state.stream_last_ui_publish.find(stream_key);
+            const bool stream_never_published = last_publish_it == state.stream_last_ui_publish.end();
+            const double elapsed = stream_never_published
+                ? min_interval
+                : std::chrono::duration<double>(now - last_publish_it->second).count();
+            if (elapsed >= min_interval || is_first || stream_never_published) {
                 should_publish = true;
-                state.last_ui_publish = now;
+                state.stream_last_ui_publish[stream_key] = now;
             }
         }
         if (should_publish) {
@@ -264,7 +274,7 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
                 {"stream_frequencies_hz", stream_frequencies},
                 {"first_message", is_first},
             },
-            .coalesce_key = "topic_data:" + topic_name,
+            .coalesce_key = "topic_data:" + stream_key,
         });
     }
 }
