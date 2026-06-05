@@ -22,7 +22,7 @@ public:
     /// Interval between check attempts when DISCONNECTED (ms).
     static constexpr int kCheckIntervalDisconnectedMs = 2000;
     /// Interval between checks when HEALTHY (ms).
-    static constexpr int kCheckIntervalHealthyMs = 3000;
+    static constexpr int kCheckIntervalHealthyMs = 2000;
     /// Maximum init recovery attempts before staying ERROR.
     static constexpr int kMaxInitRetries = 2;
 

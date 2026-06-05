@@ -543,19 +543,16 @@ QWidget* SensorWorkspaceWidget::buildVideoPlaceholder(const QString& title, QLab
     )"));
     auto* layout = new QVBoxLayout(frame);
     layout->setContentsMargins(6, 6, 6, 6);
-    layout->setSpacing(5);
+    layout->setSpacing(0);
     image_label = new QLabel(title, frame);
-    image_label->setAlignment(Qt::AlignCenter);
+    image_label->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     image_label->setMinimumSize(220, 120);
     image_label->setStyleSheet(QStringLiteral(
-        "QLabel { background-color: #101214; color: #e9edf0; border: 1px solid #2c3135; font-size: 16px; font-weight: 600; }"));
+        "QLabel { background-color: #101214; color: rgba(255,255,255,0.55); border: 1px solid #2c3135;"
+        " font-size: 18px; font-weight: 600; padding: 10px 14px; }"));
     layout->addWidget(image_label, 1);
-    status_label = new QLabel(QStringLiteral("%1 | 等待图像流 | -- x --").arg(title), frame);
-    status_label->setAlignment(Qt::AlignCenter);
-    status_label->setMinimumHeight(24);
-    status_label->setStyleSheet(QStringLiteral(
-        "QLabel { background-color: #fffdf2; color: #504a40; border: 1px solid #c9c0ae; padding: 3px 6px; font-family: monospace; }"));
-    layout->addWidget(status_label);
+    status_label = new QLabel(frame);
+    status_label->setVisible(false);
     return frame;
 }
 

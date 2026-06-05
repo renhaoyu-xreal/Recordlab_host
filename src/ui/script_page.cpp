@@ -82,7 +82,7 @@ ScriptPage::ScriptPage(QWidget* parent) : QWidget(parent) {
     script_list_->setSelectionMode(QAbstractItemView::SingleSelection);
     script_list_->setStyleSheet(QStringLiteral(
         "QListWidget { background-color: #ffffe0; border: 1px solid #888; padding: 5px; }"
-        "QListWidget::item:selected { background-color: #d7e7ff; }"));
+        "QListWidget::item:selected { background-color: #d7e7ff; color: #000000; }"));
     script_list_->addItems({
         QStringLiteral("record_ur_gt_3dof.py"),
         QStringLiteral("check_environment.py"),
