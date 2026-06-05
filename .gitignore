@@ -1,5 +1,6 @@
 build/
 logs/
+dist/
 third_party/Recordlab_nodes/
 third_party/echo_message_system/
 third_party/Recordlab_nodes

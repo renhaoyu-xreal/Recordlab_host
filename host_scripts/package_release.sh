@@ -13,7 +13,7 @@ CLEAN_DIST=1
 
 usage() {
   cat <<'EOF'
-Usage: scripts/package_release.sh [options]
+Usage: host_scripts/package_release.sh [options]
 
 Options:
   --skip-build   Reuse existing build/ outputs
@@ -105,7 +105,6 @@ if [[ -d "${HOST_ROOT}/third_party/xreal_glasses" ]]; then
   copy_tree "third_party/xreal_glasses/" "third_party/xreal_glasses/"
 fi
 copy_tree "docs/" "docs/"
-copy_tree "scripts/" "scripts/"
 copy_file "README.md" "README.md"
 
 cat > "${PACKAGE_DIR}/RecordLabHost.sh" <<'EOF'
