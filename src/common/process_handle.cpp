@@ -144,11 +144,29 @@ ProcessHandle::~ProcessHandle() {
 void ProcessHandle::start(const std::vector<std::string>& args,
                           const std::string& cwd,
                           const std::string& pythonpath) {
+    startImpl(args, cwd, pythonpath, {}, {});
+}
+
+void ProcessHandle::start(const std::vector<std::string>& args,
+                          const std::string& cwd,
+                          const std::string& pythonpath,
+                          Metadata metadata,
+                          OutputCallback output_callback) {
+    startImpl(args, cwd, pythonpath, std::move(metadata), std::move(output_callback));
+}
+
+void ProcessHandle::startImpl(const std::vector<std::string>& args,
+                              const std::string& cwd,
+                              const std::string& pythonpath,
+                              Metadata metadata,
+                              OutputCallback output_callback) {
     if (args.empty()) {
         throw std::runtime_error("Process args cannot be empty");
     }
 
     terminate();
+    metadata_ = std::move(metadata);
+    output_callback_ = std::move(output_callback);
 
     std::vector<std::string> argv_storage = args;
     argv_storage[0] = resolveExecutable(argv_storage[0]);
@@ -162,11 +180,32 @@ void ProcessHandle::start(const std::vector<std::string>& args,
         "ProcessHandle",
         "starting process: argv=" + formatArgs(argv_storage) +
             ", cwd=" + (cwd.empty() ? std::string("<inherit>") : cwd) +
-            ", stdout_stderr=" + (child_output_path.empty() ? std::string("/dev/null") : child_output_path));
+            ", stdout_stderr=" + (output_callback_
+                ? std::string("<pipe>")
+                : (child_output_path.empty() ? std::string("/dev/null") : child_output_path)),
+        contextWithPid(-1));
 
     int error_pipe[2] = {-1, -1};
     if (::pipe2(error_pipe, O_CLOEXEC) != 0) {
         throw spawnError("pipe2", errno);
+    }
+    int stdout_pipe[2] = {-1, -1};
+    int stderr_pipe[2] = {-1, -1};
+    if (output_callback_) {
+        if (::pipe2(stdout_pipe, O_CLOEXEC) != 0) {
+            const int error_code = errno;
+            ::close(error_pipe[0]);
+            ::close(error_pipe[1]);
+            throw spawnError("pipe2 stdout", error_code);
+        }
+        if (::pipe2(stderr_pipe, O_CLOEXEC) != 0) {
+            const int error_code = errno;
+            ::close(error_pipe[0]);
+            ::close(error_pipe[1]);
+            ::close(stdout_pipe[0]);
+            ::close(stdout_pipe[1]);
+            throw spawnError("pipe2 stderr", error_code);
+        }
     }
 
     pid_t child_pid = ::vfork();
@@ -174,11 +213,21 @@ void ProcessHandle::start(const std::vector<std::string>& args,
         const int error_code = errno;
         ::close(error_pipe[0]);
         ::close(error_pipe[1]);
+        if (stdout_pipe[0] >= 0) {
+            ::close(stdout_pipe[0]);
+            ::close(stdout_pipe[1]);
+        }
+        if (stderr_pipe[0] >= 0) {
+            ::close(stderr_pipe[0]);
+            ::close(stderr_pipe[1]);
+        }
         throw spawnError("vfork", error_code);
     }
 
     if (child_pid == 0) {
         ::close(error_pipe[0]);
+        if (stdout_pipe[0] >= 0) ::close(stdout_pipe[0]);
+        if (stderr_pipe[0] >= 0) ::close(stderr_pipe[0]);
         if (::setpgid(0, 0) != 0) {
             writeExecErrorAndExit(error_pipe[1], errno);
         }
@@ -188,28 +237,43 @@ void ProcessHandle::start(const std::vector<std::string>& args,
         if (::getppid() == 1) {
             writeExecErrorAndExit(error_pipe[1], ESRCH);
         }
-        const char* output_path = child_output_path.empty() ? "/dev/null" : child_output_path.c_str();
-        const int output_flags = child_output_path.empty()
-            ? O_RDWR
-            : (O_WRONLY | O_CREAT | O_APPEND);
-        int output_fd = ::open(output_path, output_flags, 0644);
-        if (output_fd < 0) {
-            writeExecErrorAndExit(error_pipe[1], errno);
-        }
         int input_fd = ::open("/dev/null", O_RDONLY);
         if (input_fd < 0) {
             writeExecErrorAndExit(error_pipe[1], errno);
         }
-        if (::dup2(input_fd, STDIN_FILENO) < 0 ||
-            ::dup2(output_fd, STDOUT_FILENO) < 0 ||
-            ::dup2(output_fd, STDERR_FILENO) < 0) {
+        if (::dup2(input_fd, STDIN_FILENO) < 0) {
             writeExecErrorAndExit(error_pipe[1], errno);
+        }
+        if (stdout_pipe[1] >= 0 && stderr_pipe[1] >= 0) {
+            if (::dup2(stdout_pipe[1], STDOUT_FILENO) < 0 ||
+                ::dup2(stderr_pipe[1], STDERR_FILENO) < 0) {
+                writeExecErrorAndExit(error_pipe[1], errno);
+            }
+        } else {
+            const char* output_path = child_output_path.empty() ? "/dev/null" : child_output_path.c_str();
+            const int output_flags = child_output_path.empty()
+                ? O_RDWR
+                : (O_WRONLY | O_CREAT | O_APPEND);
+            int output_fd = ::open(output_path, output_flags, 0644);
+            if (output_fd < 0) {
+                writeExecErrorAndExit(error_pipe[1], errno);
+            }
+            if (::dup2(output_fd, STDOUT_FILENO) < 0 ||
+                ::dup2(output_fd, STDERR_FILENO) < 0) {
+                writeExecErrorAndExit(error_pipe[1], errno);
+            }
+            if (output_fd > STDERR_FILENO) {
+                ::close(output_fd);
+            }
         }
         if (input_fd > STDERR_FILENO) {
             ::close(input_fd);
         }
-        if (output_fd > STDERR_FILENO) {
-            ::close(output_fd);
+        if (stdout_pipe[1] > STDERR_FILENO) {
+            ::close(stdout_pipe[1]);
+        }
+        if (stderr_pipe[1] > STDERR_FILENO) {
+            ::close(stderr_pipe[1]);
         }
         if (!cwd.empty() && ::chdir(cwd.c_str()) != 0) {
             writeExecErrorAndExit(error_pipe[1], errno);
@@ -219,6 +283,8 @@ void ProcessHandle::start(const std::vector<std::string>& args,
     }
 
     ::close(error_pipe[1]);
+    if (stdout_pipe[1] >= 0) ::close(stdout_pipe[1]);
+    if (stderr_pipe[1] >= 0) ::close(stderr_pipe[1]);
     int child_error = 0;
     ssize_t bytes_read = 0;
     do {
@@ -230,6 +296,8 @@ void ProcessHandle::start(const std::vector<std::string>& args,
         int status = 0;
         while (::waitpid(child_pid, &status, 0) < 0 && errno == EINTR) {
         }
+        if (stdout_pipe[0] >= 0) ::close(stdout_pipe[0]);
+        if (stderr_pipe[0] >= 0) ::close(stderr_pipe[0]);
         throw spawnError("execve", child_error);
     }
     if (bytes_read < 0) {
@@ -238,40 +306,54 @@ void ProcessHandle::start(const std::vector<std::string>& args,
         int status = 0;
         while (::waitpid(child_pid, &status, 0) < 0 && errno == EINTR) {
         }
+        if (stdout_pipe[0] >= 0) ::close(stdout_pipe[0]);
+        if (stderr_pipe[0] >= 0) ::close(stderr_pipe[0]);
         throw spawnError("read exec status", error_code);
     }
     pid_ = child_pid;
+    if (stdout_pipe[0] >= 0) {
+        stdout_thread_ = std::thread(&ProcessHandle::readOutputLoop, this, stdout_pipe[0], "stdout");
+    }
+    if (stderr_pipe[0] >= 0) {
+        stderr_thread_ = std::thread(&ProcessHandle::readOutputLoop, this, stderr_pipe[0], "stderr");
+    }
     common::Logger::instance().log(
         common::LogLevel::Info,
         "ProcessHandle",
-        "started process pid=" + std::to_string(pid_) + ", argv=" + formatArgs(argv_storage));
+        "started process pid=" + std::to_string(pid_) + ", argv=" + formatArgs(argv_storage),
+        contextWithPid(pid_));
 }
 
 void ProcessHandle::terminate() {
     if (pid_ <= 0) {
+        stopOutputReaders();
         return;
     }
     const int child_pid = pid_;
     common::Logger::instance().log(
         common::LogLevel::Info,
         "ProcessHandle",
-        "terminating process pid=" + std::to_string(child_pid));
+        "terminating process pid=" + std::to_string(child_pid),
+        contextWithPid(child_pid));
     ::kill(-child_pid, SIGTERM);
     ::kill(child_pid, SIGTERM);
     if (wait(3000) == -1 && pid_ > 0) {
         common::Logger::instance().log(
             common::LogLevel::Warn,
             "ProcessHandle",
-            "process pid=" + std::to_string(child_pid) + " did not exit after SIGTERM; sending SIGKILL");
+            "process pid=" + std::to_string(child_pid) + " did not exit after SIGTERM; sending SIGKILL",
+            contextWithPid(child_pid));
         ::kill(-child_pid, SIGKILL);
         ::kill(child_pid, SIGKILL);
         wait(1000);
     }
     pid_ = -1;
+    stopOutputReaders();
     common::Logger::instance().log(
         common::LogLevel::Info,
         "ProcessHandle",
-        "terminated process pid=" + std::to_string(child_pid));
+        "terminated process pid=" + std::to_string(child_pid),
+        contextWithPid(child_pid));
 }
 
 int ProcessHandle::wait(int timeout_ms) {
@@ -286,10 +368,12 @@ int ProcessHandle::wait(int timeout_ms) {
         if (result == pid_) {
             const int finished_pid = pid_;
             pid_ = -1;
+            stopOutputReaders();
             common::Logger::instance().log(
                 common::LogLevel::Info,
                 "ProcessHandle",
-                "process pid=" + std::to_string(finished_pid) + " exited status=" + std::to_string(status));
+                "process pid=" + std::to_string(finished_pid) + " exited status=" + std::to_string(status),
+                contextWithPid(finished_pid));
             return status;
         }
         if (result < 0) {
@@ -298,6 +382,7 @@ int ProcessHandle::wait(int timeout_ms) {
             }
             if (errno == ECHILD) {
                 pid_ = -1;
+                stopOutputReaders();
                 return 0;
             }
             return -1;
@@ -309,6 +394,90 @@ int ProcessHandle::wait(int timeout_ms) {
         waited += sleep_ms;
     }
     return -1;
+}
+
+void ProcessHandle::stopOutputReaders() {
+    if (stdout_thread_.joinable()) {
+        stdout_thread_.join();
+    }
+    if (stderr_thread_.joinable()) {
+        stderr_thread_.join();
+    }
+}
+
+void ProcessHandle::readOutputLoop(int fd, std::string stream) {
+    const int output_pid = pid_;
+    std::string pending;
+    char buffer[4096];
+    while (true) {
+        const ssize_t count = ::read(fd, buffer, sizeof(buffer));
+        if (count > 0) {
+            pending.append(buffer, static_cast<std::size_t>(count));
+            std::size_t newline = std::string::npos;
+            while ((newline = pending.find('\n')) != std::string::npos) {
+                std::string line = pending.substr(0, newline);
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+                pending.erase(0, newline + 1);
+                if (line.empty()) {
+                    continue;
+                }
+                auto payload = contextWithPid(output_pid);
+                payload["text"] = line;
+                payload["stream"] = stream;
+                common::Logger::instance().log(
+                    stream == "stderr" ? common::LogLevel::Warn : common::LogLevel::Info,
+                    "ProcessHandle",
+                    line,
+                    payload);
+                if (output_callback_) {
+                    output_callback_(payload);
+                }
+            }
+            continue;
+        }
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+    if (!pending.empty()) {
+        if (!pending.empty() && pending.back() == '\r') {
+            pending.pop_back();
+        }
+        if (!pending.empty()) {
+            auto payload = contextWithPid(output_pid);
+            payload["text"] = pending;
+            payload["stream"] = stream;
+            common::Logger::instance().log(
+                stream == "stderr" ? common::LogLevel::Warn : common::LogLevel::Info,
+                "ProcessHandle",
+                pending,
+                payload);
+            if (output_callback_) {
+                output_callback_(payload);
+            }
+        }
+    }
+    ::close(fd);
+}
+
+nlohmann::json ProcessHandle::contextWithPid(int pid) const {
+    nlohmann::json context = nlohmann::json::object();
+    if (!metadata_.process.empty()) {
+        context["process"] = metadata_.process;
+    }
+    if (!metadata_.agent_name.empty()) {
+        context["agent_name"] = metadata_.agent_name;
+    }
+    if (!metadata_.node_name.empty()) {
+        context["node_name"] = metadata_.node_name;
+    }
+    if (pid > 0) {
+        context["pid"] = pid;
+    }
+    return context;
 }
 
 void ProcessHandle::killByCmdlinePattern(const std::string& pattern) {

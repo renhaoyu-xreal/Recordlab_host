@@ -8,7 +8,6 @@ namespace recordlab::host {
 
 struct TopicConfig {
     std::string name;
-    int port = 0;
     std::string encoding = "json";
     std::string parse_mode = "json";
     double ui_max_hz = 30.0;
@@ -23,6 +22,7 @@ struct AgentConfig {
     std::string action_name;
     int goal_port = 0;
     int feedback_port = 0;
+    int data_port = 0;
     std::string root_path;
     nlohmann::json init_device_params = nlohmann::json::object();
     double init_device_pause_duration = 0.0;

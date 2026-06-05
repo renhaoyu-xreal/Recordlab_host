@@ -50,21 +50,30 @@ void Logger::appendUiLine(const std::string& line) {
 }
 
 void Logger::log(LogLevel level, const std::string& module, const std::string& message) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!all_stream_.is_open()) {
-        return;
-    }
-    all_stream_ << formatAllLine(level, module, message) << '\n';
-    all_stream_.flush();
+    log(level, module, message, nlohmann::json::object());
 }
 
-std::string Logger::formatAllLine(LogLevel level, const std::string& module, const std::string& message) const {
+void Logger::log(LogLevel level, const std::string& module, const std::string& message,
+                 const nlohmann::json& context) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::string line = formatAllLine(level, module, message, context);
+    if (all_stream_.is_open()) {
+        all_stream_ << line << '\n';
+        all_stream_.flush();
+    }
+}
+
+std::string Logger::formatAllLine(LogLevel level, const std::string& module, const std::string& message,
+                                  const nlohmann::json& context) const {
     std::ostringstream oss;
     oss << '[' << timestampString() << ']'
         << " [" << levelString(level) << "]"
         << " [" << threadIdString() << "]"
         << " [" << module << "] "
         << message;
+    if (!context.empty()) {
+        oss << " context=" << context.dump();
+    }
     return oss.str();
 }
 

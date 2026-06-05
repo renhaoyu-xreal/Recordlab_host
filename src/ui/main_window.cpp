@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QUuid>
 #include <QStackedWidget>
 
 #include <exception>
@@ -165,7 +166,7 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
                 const auto config = agent_manager_->loadAgentConfig(agent_name);
                 std::vector<DataReceiver::TopicConfig> topics;
                 for (const auto& t : config.topics)
-                    topics.push_back({t.name, t.port, t.encoding, t.parse_mode, t.ui_max_hz, t.qos});
+                    topics.push_back({t.name, config.data_port, t.encoding, t.parse_mode, t.ui_max_hz, t.qos});
                 data_receiver_->subscribe(config.subnode_host, topics);
             }
         }
@@ -241,9 +242,19 @@ void MainWindow::sendCommand(const QString& cmd, const QString& params_json) {
             return;
         }
     }
+    const QString request_id = QStringLiteral("ui_%1")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     bus_.publish({
+        .request_id = request_id.toStdString(),
         .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::CMD_REQUEST,
-        .payload = {{"cmd", cmd.toStdString()}, {"params", params}},
+        .payload = {
+            {"request_id", request_id.toStdString()},
+            {"agent_name", active_agent_.toStdString()},
+            {"cmd", cmd.toStdString()},
+            {"params", params},
+            {"priority", "normal"},
+            {"silent", false},
+        },
     });
 }
 

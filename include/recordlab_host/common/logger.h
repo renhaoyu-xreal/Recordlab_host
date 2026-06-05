@@ -4,6 +4,8 @@
 #include <mutex>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 namespace recordlab::host::common {
 
 enum class LogLevel {
@@ -25,11 +27,14 @@ public:
 
     void appendUiLine(const std::string& line);
     void log(LogLevel level, const std::string& module, const std::string& message);
+    void log(LogLevel level, const std::string& module, const std::string& message,
+             const nlohmann::json& context);
 
 private:
     Logger() = default;
 
-    std::string formatAllLine(LogLevel level, const std::string& module, const std::string& message) const;
+    std::string formatAllLine(LogLevel level, const std::string& module, const std::string& message,
+                              const nlohmann::json& context = nlohmann::json::object()) const;
     std::string levelString(LogLevel level) const;
     std::string timestampString() const;
     std::string threadIdString() const;

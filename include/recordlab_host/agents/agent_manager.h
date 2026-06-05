@@ -1,14 +1,14 @@
 #pragma once
 
 #include "recordlab_host/agents/agent_config_loader.h"
+#include "recordlab_host/agents/agent_proxy.h"
 #include "recordlab_host/bus/host_message_bus.h"
-#include "recordlab_host/common/process_handle.h"
-#include "recordlab_host/communication/echo_action_client.h"
 
 #include <atomic>
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace recordlab::host {
@@ -37,11 +37,13 @@ private:
     void workerLoop();
     void handleMessage(const HostMessage& msg);
     void doActivateAgent(const std::string& agent_name);
-    void doCmdRequest(const std::string& cmd, const nlohmann::json& params, int timeout_ms = 5000);
+    void doCmdRequest(const std::string& agent_name, const std::string& cmd,
+                      const nlohmann::json& params, bool silent);
     void doShutdownAgent();
 
-    void startNodeProcess(const AgentConfig& config);
-    bool ensureClient(const AgentConfig& config);
+    AgentProxy* activeAgent();
+    AgentProxy* findAgent(const std::string& agent_name);
+    AgentProxy& getOrCreateAgent(const AgentConfig& config);
     void publishResult(const std::string& type, nlohmann::json payload);
 
     HostMessageBus& bus_;
@@ -49,14 +51,13 @@ private:
     std::string nodes_root_;
     std::string echo_python_root_;
 
-    std::unique_ptr<ProcessHandle> node_process_;
-    std::unique_ptr<EchoActionClient> action_client_;
+    std::unordered_map<std::string, std::unique_ptr<AgentProxy>> agents_;
     std::string active_agent_;
-    std::string node_process_agent_;
 
     std::thread worker_;
     std::atomic<bool> running_{false};
     std::string last_source_;
+    std::string last_request_id_;
 };
 
 }  // namespace recordlab::host

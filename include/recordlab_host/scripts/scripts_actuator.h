@@ -32,7 +32,7 @@ private:
     void doStopScript();
     QString resolveScriptPath(const QString& script_path) const;
     void processOutputBytes(const QByteArray& data, QByteArray& buffer);
-    void processOutputLine(const QString& line);
+    void processOutputLine(const QString& line, const std::string& stream);
     bool handleRuntimeEvent(const QString& line);
     void handleDialogEvent(const nlohmann::json& event);
     void handleWorkflowEvent(const nlohmann::json& event);
@@ -49,6 +49,10 @@ private:
     QByteArray stdout_buffer_;
     QByteArray stderr_buffer_;
     QTimer* poll_timer_ = nullptr;
+    std::string current_script_id_;
+    std::string current_script_path_;
+    std::string current_agent_name_;
+    long long current_script_pid_ = 0;
 };
 
 }  // namespace recordlab::host

@@ -68,10 +68,7 @@ int main() {
 
     int goal_port = freePort();
     int feedback_port = freePort();
-    int imu_port = freePort();
-    int record_port = freePort();
-    int delay_port = freePort();
-    int motion_port = freePort();
+    int data_port = freePort();
 
     std::ofstream cfg(config);
     cfg << R"({
@@ -84,12 +81,13 @@ int main() {
           "action_name": "imu_cpp_actions",
           "goal_port": )" << goal_port << R"(,
           "feedback_port": )" << feedback_port << R"(,
+          "data_port": )" << data_port << R"(,
           "root_path": ")" << data_root.string() << R"(",
           "topics": [
-            {"name": "imu_data", "port": )" << imu_port << R"(, "encoding": "json"},
-            {"name": "record_timer", "port": )" << record_port << R"(, "encoding": "json"},
-            {"name": "time_delay", "port": )" << delay_port << R"(, "encoding": "json"},
-            {"name": "motion_status", "port": )" << motion_port << R"(, "encoding": "json"}
+            {"name": "imu_data", "encoding": "json"},
+            {"name": "record_timer", "encoding": "json"},
+            {"name": "time_delay", "encoding": "json"},
+            {"name": "motion_status", "encoding": "json"}
           ],
           "custom_params": {}
         }
@@ -118,7 +116,7 @@ int main() {
         assert(ready);
 
         std::vector<nlohmann::json> imu_messages;
-        recordlab::host::EchoTopicSubscriber sub("127.0.0.1", imu_port, "imu_data",
+        recordlab::host::EchoTopicSubscriber sub("127.0.0.1", data_port, "imu_data",
             [&](const nlohmann::json& data) { imu_messages.push_back(data); });
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
 

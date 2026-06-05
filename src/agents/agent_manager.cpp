@@ -2,23 +2,33 @@
 #include "recordlab_host/bus/message_types.h"
 #include "recordlab_host/common/logger.h"
 
-#include <chrono>
-#include <cstdlib>
 #include <sstream>
-#include <thread>
 
 namespace recordlab::host {
 namespace {
 
-std::string describeTopics(const std::vector<TopicConfig>& topics) {
+std::string describeTopics(const std::vector<TopicConfig>& topics, int data_port) {
     std::ostringstream oss;
     for (std::size_t i = 0; i < topics.size(); ++i) {
         if (i > 0) {
             oss << ", ";
         }
-        oss << topics[i].name << "@" << topics[i].port << "/" << topics[i].encoding;
+        oss << topics[i].name << "@" << data_port << "/" << topics[i].encoding;
     }
     return oss.str();
+}
+
+int commandTimeoutMs(const std::string& cmd) {
+    if (cmd == "start_device") {
+        return 90000;
+    }
+    if (cmd == "init_device") {
+        return 30000;
+    }
+    if (cmd == "release_device" || cmd == "stop_device" || cmd == "estop") {
+        return 10000;
+    }
+    return 5000;
 }
 
 }  // namespace
@@ -74,6 +84,9 @@ void AgentManager::handleMessage(const HostMessage& msg) {
     if (!msg.source.empty()) {
         last_source_ = msg.source;
     }
+    last_request_id_ = msg.request_id.empty()
+        ? msg.payload.value("request_id", std::string{})
+        : msg.request_id;
 
     if (msg.type == msg::SHUTDOWN_AGENT) {
         return;  // workerLoop will exit via running_ flag
@@ -82,30 +95,27 @@ void AgentManager::handleMessage(const HostMessage& msg) {
         const auto agent_name = msg.payload.value("agent_name", std::string{});
         doActivateAgent(agent_name);
     } else if (msg.type == msg::CMD_REQUEST) {
+        const auto agent_name = msg.payload.value("agent_name", active_agent_);
         const auto cmd = msg.payload.value("cmd", std::string{});
         const auto params = msg.payload.value("params", nlohmann::json::object());
-        int timeout_ms = 5000;
-        if (cmd == "start_device") {
-            timeout_ms = 90000;
-        } else if (cmd == "release_device" || cmd == "stop_device" || cmd == "estop") {
-            timeout_ms = 10000;
-        }
-        doCmdRequest(cmd, params, timeout_ms);
+        const auto silent = msg.payload.value("silent", false);
+        doCmdRequest(agent_name, cmd, params, silent);
     } else if (msg.type == msg::INIT_DEVICE) {
         const auto agent_name = msg.payload.value("agent_name", active_agent_);
-        auto params = nlohmann::json::object();
-        if (!agent_name.empty()) {
-            params = AgentConfigLoader(agents_config_path_).loadAgent(agent_name).init_device_params;
+        const std::string target_agent = agent_name.empty() ? active_agent_ : agent_name;
+        nlohmann::json params = nlohmann::json::object();
+        if (AgentProxy* agent = findAgent(target_agent)) {
+            params = agent->config().init_device_params;
         }
-        doCmdRequest("init_device", params, 30000);
+        doCmdRequest(agent_name, "init_device", params, false);
     } else if (msg.type == msg::ESTOP) {
-        doCmdRequest("estop", nlohmann::json::object(), 10000);
+        const auto agent_name = msg.payload.value("agent_name", active_agent_);
+        doCmdRequest(agent_name, "estop", nlohmann::json::object(), false);
     }
 }
 
 void AgentManager::doActivateAgent(const std::string& agent_name) {
     try {
-        active_agent_ = agent_name;
         const auto config = AgentConfigLoader(agents_config_path_).loadAgent(agent_name);
         publishResult(msg::LOG_ENTRY, {{"message", "启动 Agent: " + agent_name}});
         common::Logger::instance().log(
@@ -116,9 +126,16 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
                 ", action=" + config.action_name +
                 ", goal_port=" + std::to_string(config.goal_port) +
                 ", feedback_port=" + std::to_string(config.feedback_port) +
-                ", topics=[" + describeTopics(config.topics) + "]");
-        startNodeProcess(config);
-        if (ensureClient(config)) {
+                ", data_port=" + std::to_string(config.data_port) +
+                ", topics=[" + describeTopics(config.topics, config.data_port) + "]",
+            {
+                {"request_id", last_request_id_},
+                {"agent_name", config.name},
+                {"node_name", config.name},
+                {"data_port", config.data_port},
+            });
+        AgentProxy& agent = getOrCreateAgent(config);
+        if (agent.launchOrConnect()) {
             publishResult(msg::LOG_ENTRY, {{"message", "Agent " + agent_name + " 连接成功，等待 Watchdog 初始化"}});
             publishResult(msg::AGENT_ACTIVATED, {
                 {"agent_name", agent_name}, {"success", true},
@@ -127,7 +144,7 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
                 {"topics", [&]() {
                     nlohmann::json arr = nlohmann::json::array();
                     for (const auto& t : config.topics)
-                        arr.push_back({{"name", t.name}, {"port", t.port}, {"encoding", t.encoding}});
+                        arr.push_back({{"name", t.name}, {"port", config.data_port}, {"encoding", t.encoding}});
                     return arr;
                 }()},
                 {"init_device_params", config.init_device_params},
@@ -146,81 +163,150 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
     }
 }
 
-void AgentManager::doCmdRequest(const std::string& cmd, const nlohmann::json& params, int timeout_ms) {
-    if (!action_client_) {
-        publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", false}, {"message", "当前没有可用 Agent client"}});
+void AgentManager::doCmdRequest(const std::string& agent_name, const std::string& cmd,
+                                const nlohmann::json& params, bool silent) {
+    const std::string target_agent = agent_name.empty() ? active_agent_ : agent_name;
+    if (target_agent.empty()) {
+        publishResult(msg::CMD_RESULT, {
+            {"agent_name", target_agent},
+            {"cmd", cmd},
+            {"success", false},
+            {"message", "当前没有 active Agent"},
+        });
+        return;
+    }
+    if (!active_agent_.empty() && target_agent != active_agent_) {
+        publishResult(msg::CMD_RESULT, {
+            {"agent_name", target_agent},
+            {"cmd", cmd},
+            {"success", false},
+            {"message", "请求 Agent 与当前 active Agent 不一致: " + target_agent + " != " + active_agent_},
+        });
+        return;
+    }
+    AgentProxy* agent = findAgent(target_agent);
+    if (!agent || !agent->isConnected()) {
+        publishResult(msg::CMD_RESULT, {
+            {"agent_name", target_agent},
+            {"cmd", cmd},
+            {"success", false},
+            {"message", "当前没有可用 Agent client"},
+        });
         return;
     }
     try {
-        publishResult(msg::LOG_ENTRY, {{"message", "发送命令: " + cmd + " " + params.dump()}});
-        const auto result = action_client_->sendCommand(cmd, params, timeout_ms);
+        if (!silent) {
+            publishResult(msg::LOG_ENTRY, {{"message", "发送命令: " + cmd + " " + params.dump()}});
+        }
+        common::Logger::instance().log(common::LogLevel::Info, "AgentManager", "sending command", {
+            {"request_id", last_request_id_},
+            {"agent_name", target_agent},
+            {"cmd", cmd},
+        });
+        const auto result = agent->cmd(cmd, params, commandTimeoutMs(cmd));
         const auto message = result.result.value("message", result.result.dump());
-        publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", result.success}, {"message", message}});
-        publishResult(msg::LOG_ENTRY, {{"message", cmd + ": " + message}});
+        common::Logger::instance().log(
+            result.success ? common::LogLevel::Info : common::LogLevel::Warn,
+            "AgentManager",
+            "command result",
+            {
+                {"request_id", last_request_id_},
+                {"agent_name", target_agent},
+                {"cmd", cmd},
+                {"success", result.success},
+                {"message", message},
+            });
+        publishResult(msg::CMD_RESULT, {
+            {"agent_name", target_agent},
+            {"cmd", cmd},
+            {"success", result.success},
+            {"message", message},
+        });
+        if (!silent) {
+            publishResult(msg::LOG_ENTRY, {{"message", cmd + ": " + message}});
+        }
     } catch (const std::exception& e) {
-        publishResult(msg::CMD_RESULT, {{"cmd", cmd}, {"success", false}, {"message", e.what()}});
-        publishResult(msg::LOG_ENTRY, {{"message", cmd + " 失败: " + std::string(e.what())}});
+        common::Logger::instance().log(common::LogLevel::Error, "AgentManager", "command exception", {
+            {"request_id", last_request_id_},
+            {"agent_name", target_agent},
+            {"cmd", cmd},
+            {"message", e.what()},
+        });
+        publishResult(msg::CMD_RESULT, {
+            {"agent_name", target_agent},
+            {"cmd", cmd},
+            {"success", false},
+            {"message", e.what()},
+        });
+        if (!silent) {
+            publishResult(msg::LOG_ENTRY, {{"message", cmd + " 失败: " + std::string(e.what())}});
+        }
     }
 }
 
 void AgentManager::doShutdownAgent() {
-    action_client_.reset();
-    if (node_process_) {
-        node_process_->terminate();
-        node_process_.reset();
+    for (auto& [_, agent] : agents_) {
+        if (agent) agent->disconnect();
     }
-    node_process_agent_.clear();
+    agents_.clear();
     active_agent_.clear();
 }
 
-void AgentManager::startNodeProcess(const AgentConfig& config) {
-    if (node_process_ && node_process_->pid() > 0 && node_process_agent_ == config.name) return;
-    if (node_process_) {
-        action_client_.reset();
-        node_process_->terminate();
-        node_process_.reset();
-        node_process_agent_.clear();
-    }
-    node_process_ = std::make_unique<ProcessHandle>();
-    const std::string pythonpath = nodes_root_ + ":" + echo_python_root_;
-    const char* python_bin_env = std::getenv("RECORDLAB_PYTHON_BIN");
-    const std::string python_bin = python_bin_env && *python_bin_env ? python_bin_env : "python3.10";
-    common::Logger::instance().log(
-        common::LogLevel::Info,
-        "AgentManager",
-        "launch node_runtime agent=" + config.name +
-            ", python=" + python_bin +
-            ", cwd=" + nodes_root_ +
-            ", pythonpath=" + pythonpath);
-    node_process_->start(
-        {python_bin, "-m", "recordlab_nodes.core.node_runtime",
-         "--config", agents_config_path_, "--agent", config.name},
-        nodes_root_, pythonpath);
-    node_process_agent_ = config.name;
-    publishResult(msg::LOG_ENTRY, {{"message", "node_runtime pid=" + std::to_string(node_process_->pid())}});
+AgentProxy* AgentManager::activeAgent() {
+    return findAgent(active_agent_);
 }
 
-bool AgentManager::ensureClient(const AgentConfig& config) {
-    for (int attempt = 0; attempt < 20; ++attempt) {
-        if (!action_client_) {
-            action_client_ = std::make_unique<EchoActionClient>(
-                config.subnode_host, config.goal_port, config.feedback_port, 3000);
-        }
-        if (action_client_->waitForServer(1000)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            return true;
-        }
-        action_client_.reset();
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+AgentProxy* AgentManager::findAgent(const std::string& agent_name) {
+    auto it = agents_.find(agent_name);
+    return it == agents_.end() ? nullptr : it->second.get();
+}
+
+AgentProxy& AgentManager::getOrCreateAgent(const AgentConfig& config) {
+    if (!active_agent_.empty() && active_agent_ != config.name) {
+        if (AgentProxy* current = activeAgent()) current->disconnect();
     }
-    return false;
+    auto it = agents_.find(config.name);
+    if (it == agents_.end()) {
+        it = agents_.emplace(
+            config.name,
+            std::make_unique<AgentProxy>(
+                config,
+                agents_config_path_,
+                nodes_root_,
+                echo_python_root_,
+                [this](nlohmann::json payload) {
+                    bus_.publish({
+                        .source = msg::AGENT_MANAGER,
+                        .target = msg::UI,
+                        .type = msg::PROCESS_OUTPUT,
+                        .payload = std::move(payload),
+                    });
+                })).first;
+    }
+    active_agent_ = config.name;
+    return *it->second;
 }
 
 void AgentManager::publishResult(const std::string& type, nlohmann::json payload) {
+    if (type == msg::CMD_RESULT && !last_request_id_.empty()) {
+        payload["request_id"] = last_request_id_;
+    }
     // Route to both the original caller and UI for visibility.
-    bus_.publish({.source = msg::AGENT_MANAGER, .target = last_source_, .type = type, .payload = payload});
+    bus_.publish({
+        .request_id = last_request_id_,
+        .source = msg::AGENT_MANAGER,
+        .target = last_source_,
+        .type = type,
+        .payload = payload,
+    });
     if (last_source_ != msg::UI) {
-        bus_.publish({.source = msg::AGENT_MANAGER, .target = msg::UI, .type = type, .payload = payload});
+        bus_.publish({
+            .request_id = last_request_id_,
+            .source = msg::AGENT_MANAGER,
+            .target = msg::UI,
+            .type = type,
+            .payload = payload,
+        });
     }
 }
 
