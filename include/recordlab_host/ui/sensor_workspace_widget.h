@@ -35,6 +35,7 @@ public:
     QPlainTextEdit* realtimeValueView() const;
     QLabel* motionStatusLabel() const;
     void configureLayout(const nlohmann::json& sensor_layout);
+    void resetTopicData(const QString& data_name);
     void handleRealtimeData(const QString& data_name, const nlohmann::json& value, double frequency);
 
 private:

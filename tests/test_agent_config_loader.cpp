@@ -63,6 +63,19 @@ int main() {
     assert(mcu.init_device_params.value("allow_ssh_reboot", true) == false);
     assert(mcu.custom_params.value("persist_ssh_artifacts", true) == false);
 
+    auto ur = loader.loadAgent("UR_node");
+    assert(ur.name == "UR_node");
+    assert(ur.process_type == "external_action");
+    assert(ur.node_class.empty());
+    assert(ur.goal_port == 5557);
+    assert(ur.feedback_port == 5558);
+    assert(ur.data_port == 0);
+
+    auto localhost = loader.loadAgent("localhost");
+    assert(localhost.name == "localhost");
+    assert(localhost.process_type == "local_scripts");
+    assert(localhost.custom_params.value("scripts_dir", std::string{}) == "scripts");
+
     const auto tmp = hostRoot() / "build" / "test_agent_config_loader_tmp.json";
     {
         std::ofstream out(tmp);

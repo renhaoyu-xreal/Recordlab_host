@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
         out << "import sys\n";
         out << "print('__RECORDLAB_EVENT__ {\"type\":\"dialog\",\"id\":\"dlg-1\",\"kind\":\"info\",\"title\":\"Demo\",\"message\":\"hello\"}', flush=True)\n";
         out << "print('dialog response ' + sys.stdin.readline().strip(), flush=True)\n";
-        out << "print('__RECORDLAB_EVENT__ {\"type\":\"cmd_request\",\"id\":\"cmd-1\",\"request_id\":\"cmd-1\",\"agent_name\":\"imu_proxy\",\"cmd\":\"check\",\"params\":{}}', flush=True)\n";
+        out << "print('__RECORDLAB_EVENT__ {\"type\":\"cmd_request\",\"id\":\"cmd-1\",\"request_id\":\"cmd-1\",\"agent_name\":\"imu_proxy\",\"cmd\":\"check\",\"params\":{},\"timeout_s\":1.25}', flush=True)\n";
         out << "print('cmd response ' + sys.stdin.readline().strip(), flush=True)\n";
         out << "print('script lifecycle error', file=sys.stderr, flush=True)\n";
     }
@@ -150,6 +150,8 @@ int main(int argc, char** argv) {
             for (const auto& msg : bus.drainFor(recordlab::host::msg::AGENT_MANAGER)) {
                 if (msg.type == recordlab::host::msg::CMD_REQUEST) {
                     saw_cmd_request = true;
+                    require(msg.payload.value("timeout_ms", 0) == 1250,
+                            "script cmd request should forward timeout_s as timeout_ms");
                     bus.publish({
                         .request_id = msg.request_id,
                         .source = recordlab::host::msg::AGENT_MANAGER,

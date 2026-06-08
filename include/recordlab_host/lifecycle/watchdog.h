@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace recordlab::host {
 
@@ -20,9 +21,9 @@ public:
     /// Maximum consecutive check failures before declaring DISCONNECTED.
     static constexpr int kMaxCheckFailures = 1;
     /// Interval between check attempts when DISCONNECTED (ms).
-    static constexpr int kCheckIntervalDisconnectedMs = 2000;
+    static constexpr int kCheckIntervalDisconnectedMs = 1000;
     /// Interval between checks when HEALTHY (ms).
-    static constexpr int kCheckIntervalHealthyMs = 2000;
+    static constexpr int kCheckIntervalHealthyMs = 1000;
     /// Maximum init recovery attempts before staying ERROR.
     static constexpr int kMaxInitRetries = 2;
 
@@ -42,6 +43,9 @@ public:
     /// Bind the watchdog to an activated agent and start connectivity checks.
     void setActiveAgent(std::string agent_name);
 
+    /// Monitor a generic set of agents for the current script/session.
+    void setMonitoredAgents(std::vector<std::string> agent_names, bool script_monitoring = false);
+
     /// Stop monitoring the active agent without stopping the thread.
     void clearActiveAgent();
 
@@ -53,7 +57,12 @@ private:
     AgentHealthState doCheck();
     AgentHealthState doInitDevice();
     bool doRecoveryClose();
+    bool checkAgent(const std::string& agent_name, int timeout_ms, std::string* failure_reason);
+    void sendEstopToMonitoredAgents();
+    void sendStopRecordToMonitoredAgents();
+    void stopScriptAndStopRecords(const std::string& reason);
     std::string activeAgent() const;
+    std::vector<std::string> monitoredAgents() const;
     bool hasActiveAgent() const;
     void publishState(AgentHealthState state, const nlohmann::json& extra = nlohmann::json::object());
     void publishErrorNotification();
@@ -63,6 +72,7 @@ private:
 
     HostMessageBus& bus_;
     std::string agent_name_;
+    std::vector<std::string> monitored_agent_names_;
     mutable std::mutex agent_mutex_;
 
     std::thread worker_;
@@ -71,6 +81,8 @@ private:
     std::atomic<AgentHealthState> state_{AgentHealthState::DISCONNECTED};
     std::atomic<int> consecutive_failures_{0};
     std::atomic<int> init_failures_{0};
+    std::atomic<bool> failure_stop_sent_{false};
+    std::atomic<bool> script_monitoring_{false};
     std::string last_reason_ = "startup";
 };
 

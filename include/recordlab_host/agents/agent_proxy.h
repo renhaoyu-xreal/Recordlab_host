@@ -31,14 +31,14 @@ public:
     const AgentConfig& config() const;
     bool isConnected() const;
 
-    bool launchOrConnect();
+    bool launchOrConnect(int connect_timeout_ms = 0);
     void disconnect();
     ActionResult cmd(const std::string& cmd, const nlohmann::json& params, int timeout_ms = 5000);
 
 private:
     bool shouldLaunchLocalNode() const;
     void startNodeProcess();
-    bool ensureClient();
+    bool ensureClient(int connect_timeout_ms = 0);
 
     AgentConfig config_;
     std::string agents_config_path_;

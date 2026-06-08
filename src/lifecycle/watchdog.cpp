@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <unordered_set>
 
 namespace recordlab::host {
 namespace {
@@ -53,20 +54,48 @@ void Watchdog::setActiveAgent(std::string agent_name) {
     {
         std::lock_guard<std::mutex> lock(agent_mutex_);
         agent_name_ = std::move(agent_name);
+        monitored_agent_names_.clear();
+        if (!agent_name_.empty()) monitored_agent_names_.push_back(agent_name_);
     }
     consecutive_failures_ = 0;
     init_failures_ = 0;
+    failure_stop_sent_ = false;
+    script_monitoring_ = false;
     last_reason_ = "agent_activated";
     state_ = AgentHealthState::DISCONNECTED;
+}
+
+void Watchdog::setMonitoredAgents(std::vector<std::string> agent_names, bool script_monitoring) {
+    std::vector<std::string> unique_names;
+    std::unordered_set<std::string> seen;
+    for (auto& name : agent_names) {
+        if (name.empty() || seen.count(name) > 0) continue;
+        seen.insert(name);
+        unique_names.push_back(std::move(name));
+    }
+    {
+        std::lock_guard<std::mutex> lock(agent_mutex_);
+        if (unique_names.empty() && !agent_name_.empty()) {
+            unique_names.push_back(agent_name_);
+        }
+        monitored_agent_names_ = std::move(unique_names);
+    }
+    consecutive_failures_ = 0;
+    failure_stop_sent_ = false;
+    script_monitoring_ = script_monitoring;
+    last_reason_ = "monitored_agents_updated";
 }
 
 void Watchdog::clearActiveAgent() {
     {
         std::lock_guard<std::mutex> lock(agent_mutex_);
         agent_name_.clear();
+        monitored_agent_names_.clear();
     }
     consecutive_failures_ = 0;
     init_failures_ = 0;
+    failure_stop_sent_ = false;
+    script_monitoring_ = false;
     last_reason_ = "agent_cleared";
     state_ = AgentHealthState::DISCONNECTED;
 }
@@ -94,12 +123,7 @@ void Watchdog::workerLoop() {
             init_failures_ = 0;
             last_reason_ = "estop";
             publishState(AgentHealthState::DISCONNECTED);
-            bus_.publish({
-                .source = msg::WATCHDOG,
-                .target = msg::AGENT_MANAGER,
-                .type = msg::ESTOP,
-                .payload = {{"agent_name", agent_name}},
-            });
+            sendEstopToMonitoredAgents();
             continue;
         }
 
@@ -152,6 +176,47 @@ void Watchdog::workerLoop() {
 
 AgentHealthState Watchdog::doCheck() {
     const auto agent_name = activeAgent();
+    const auto monitored_agents = monitoredAgents();
+    if (agent_name.empty() && monitored_agents.empty()) {
+        last_reason_ = "no_active_agent";
+        return AgentHealthState::DISCONNECTED;
+    }
+    const auto primary_agent = agent_name.empty() ? monitored_agents.front() : agent_name;
+    std::string failure_reason;
+    if (!checkAgent(primary_agent, 3000, &failure_reason)) {
+        consecutive_failures_++;
+        last_reason_ = failure_reason;
+        if (script_monitoring_) stopScriptAndStopRecords(failure_reason);
+        return AgentHealthState::DISCONNECTED;
+    }
+
+    for (const auto& monitored_agent : monitored_agents) {
+        if (monitored_agent == primary_agent) continue;
+        std::string monitored_failure;
+        if (!checkAgent(monitored_agent, 3000, &monitored_failure)) {
+            consecutive_failures_++;
+            last_reason_ = monitored_failure;
+            stopScriptAndStopRecords(monitored_failure);
+            return AgentHealthState::DISCONNECTED;
+        }
+    }
+
+    consecutive_failures_ = 0;
+    failure_stop_sent_ = false;
+    if (state_.load() == AgentHealthState::DISCONNECTED) {
+        init_failures_ = 0;
+        last_reason_ = "check_succeeded";
+        return AgentHealthState::INITIALIZING;
+    }
+    if (state_.load() == AgentHealthState::ERROR) {
+        last_reason_ = "error_check_still_succeeds";
+        return AgentHealthState::ERROR;
+    }
+    last_reason_ = "check_succeeded";
+    return AgentHealthState::HEALTHY;
+}
+
+bool Watchdog::checkAgent(const std::string& agent_name, int timeout_ms, std::string* failure_reason) {
     const auto request_id = makeWatchdogRequestId(agent_name, "check");
     common::Logger::instance().log(common::LogLevel::Debug, "Watchdog",
         "sending check for agent=" + agent_name,
@@ -172,40 +237,24 @@ AgentHealthState Watchdog::doCheck() {
         },
     });
 
-    auto opt = waitForResult(request_id, "check", 3000);
+    auto opt = waitForResult(request_id, "check", timeout_ms);
     if (!opt) {
-        consecutive_failures_++;
-        last_reason_ = "check_timeout";
+        if (failure_reason) *failure_reason = "check_timeout:" + agent_name;
         common::Logger::instance().log(common::LogLevel::Warn, "Watchdog",
             "check timeout for agent=" + agent_name,
             {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "check"}});
-        return AgentHealthState::DISCONNECTED;
+        return false;
     }
 
     if (!opt->payload.value("success", false)) {
-        consecutive_failures_++;
-        last_reason_ = "check_failed";
+        if (failure_reason) *failure_reason = "check_failed:" + agent_name;
         common::Logger::instance().log(common::LogLevel::Warn, "Watchdog",
             "check returned failure for agent=" + agent_name +
                 " (consecutive=" + std::to_string(consecutive_failures_.load()) + ")",
             {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "check"}});
-        return consecutive_failures_ >= kMaxCheckFailures
-            ? AgentHealthState::DISCONNECTED
-            : state_.load();
+        return false;
     }
-
-    consecutive_failures_ = 0;
-    if (state_.load() == AgentHealthState::DISCONNECTED) {
-        init_failures_ = 0;
-        last_reason_ = "check_succeeded";
-        return AgentHealthState::INITIALIZING;
-    }
-    if (state_.load() == AgentHealthState::ERROR) {
-        last_reason_ = "error_check_still_succeeds";
-        return AgentHealthState::ERROR;
-    }
-    last_reason_ = "check_succeeded";
-    return AgentHealthState::HEALTHY;
+    return true;
 }
 
 AgentHealthState Watchdog::doInitDevice() {
@@ -307,13 +356,23 @@ std::string Watchdog::activeAgent() const {
     return agent_name_;
 }
 
+std::vector<std::string> Watchdog::monitoredAgents() const {
+    std::lock_guard<std::mutex> lock(agent_mutex_);
+    return monitored_agent_names_;
+}
+
 bool Watchdog::hasActiveAgent() const {
-    return !activeAgent().empty();
+    return !monitoredAgents().empty();
 }
 
 void Watchdog::publishState(AgentHealthState state, const nlohmann::json& extra) {
+    nlohmann::json monitored = nlohmann::json::array();
+    for (const auto& name : monitoredAgents()) {
+        monitored.push_back(name);
+    }
     nlohmann::json payload = {
         {"agent_name", activeAgent()},
+        {"monitored_agents", monitored},
         {"state", ::recordlab::host::to_string(state)},
         {"reason", last_reason_},
         {"consecutive_failures", consecutive_failures_.load()},
@@ -328,6 +387,61 @@ void Watchdog::publishState(AgentHealthState state, const nlohmann::json& extra)
         .type = msg::WATCHDOG_STATE,
         .payload = std::move(payload),
     });
+}
+
+void Watchdog::sendEstopToMonitoredAgents() {
+    auto agents = monitoredAgents();
+    const auto active = activeAgent();
+    if (!active.empty() && std::find(agents.begin(), agents.end(), active) == agents.end()) {
+        agents.push_back(active);
+    }
+    for (const auto& agent_name : agents) {
+        bus_.publish({
+            .source = msg::WATCHDOG,
+            .target = msg::AGENT_MANAGER,
+            .type = msg::ESTOP,
+            .payload = {{"agent_name", agent_name}},
+        });
+    }
+}
+
+void Watchdog::sendStopRecordToMonitoredAgents() {
+    auto agents = monitoredAgents();
+    const auto active = activeAgent();
+    if (!active.empty() && std::find(agents.begin(), agents.end(), active) == agents.end()) {
+        agents.push_back(active);
+    }
+    for (const auto& agent_name : agents) {
+        const auto request_id = makeWatchdogRequestId(agent_name, "stop_record");
+        bus_.publish({
+            .request_id = request_id,
+            .source = msg::WATCHDOG,
+            .target = msg::AGENT_MANAGER,
+            .type = msg::CMD_REQUEST,
+            .payload = {
+                {"request_id", request_id},
+                {"agent_name", agent_name},
+                {"cmd", "stop_record"},
+                {"params", nlohmann::json::object()},
+                {"priority", "high"},
+                {"silent", true},
+            },
+        });
+    }
+}
+
+void Watchdog::stopScriptAndStopRecords(const std::string& reason) {
+    if (failure_stop_sent_.exchange(true)) return;
+    common::Logger::instance().log(common::LogLevel::Error, "Watchdog",
+        "monitored agent failed, stopping script and recordings: " + reason,
+        {{"reason", reason}});
+    bus_.publish({
+        .source = msg::WATCHDOG,
+        .target = msg::SCRIPTS_ACTUATOR,
+        .type = msg::STOP_SCRIPT,
+        .payload = {{"reason", reason}},
+    });
+    sendStopRecordToMonitoredAgents();
 }
 
 void Watchdog::publishErrorNotification() {

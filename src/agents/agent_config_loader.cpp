@@ -56,17 +56,32 @@ AgentConfig AgentConfigLoader::loadAgent(const std::string& agent_name) const {
     const auto& item = doc["agents"][agent_name];
     AgentConfig cfg;
     cfg.name = item.value("name", agent_name);
-    cfg.node_class = item.at("node_class").get<std::string>();
-    cfg.process_type = item.value("process_type", "python_node");
+    cfg.node_class = item.value("node_class", std::string{});
+    std::string default_process_type = cfg.node_class.empty()
+        ? std::string("external_action")
+        : std::string("python_node");
+    if (cfg.node_class.empty() && item.contains("scripts_dir")) {
+        default_process_type = "local_scripts";
+    }
+    cfg.process_type = item.value("process_type", default_process_type);
     cfg.subnode_host = item.value("subnode_host", "127.0.0.1");
     cfg.action_name = item.value("action_name", cfg.name + "_actions");
-    cfg.goal_port = item.at("goal_port").get<int>();
-    cfg.feedback_port = item.at("feedback_port").get<int>();
-    cfg.data_port = item.at("data_port").get<int>();
+    cfg.goal_port = item.value("goal_port", 0);
+    cfg.feedback_port = item.value("feedback_port", 0);
+    cfg.data_port = item.value("data_port", 0);
+    if (cfg.process_type != "local_scripts" && (cfg.goal_port <= 0 || cfg.feedback_port <= 0)) {
+        throw std::runtime_error("Agent action ports are required: " + cfg.name);
+    }
+    if (cfg.process_type == "python_node" && cfg.data_port <= 0) {
+        throw std::runtime_error("Python node data_port is required: " + cfg.name);
+    }
     cfg.root_path = item.value("root_path", "data");
     cfg.init_device_params = item.value("init_device_params", nlohmann::json::object());
     cfg.init_device_pause_duration = item.value("init_device_pause_duration", 0.0);
     cfg.custom_params = item.value("custom_params", nlohmann::json::object());
+    if (item.contains("scripts_dir")) {
+        cfg.custom_params["scripts_dir"] = item.value("scripts_dir", std::string("scripts"));
+    }
     cfg.sensor_layout = resolveSharedValue(
         doc, item, "sensor_layout", "sensor_layouts", nlohmann::json::object());
     cfg.error_messages = resolveSharedValue(

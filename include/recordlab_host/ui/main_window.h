@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 class QStackedWidget;
 
@@ -80,6 +81,9 @@ private:
     QString data_registry_host_;
     int data_registry_port_ = 16600;
     QString active_agent_;
+    bool active_agent_connected_ = false;
+    std::vector<std::string> pending_script_agents_;
+    bool script_monitoring_started_ = false;
 
     // ── Architecture components (PLAN.md) ──────────────────────
     HostMessageBus bus_;

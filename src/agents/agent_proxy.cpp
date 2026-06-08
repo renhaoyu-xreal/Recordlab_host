@@ -2,6 +2,7 @@
 
 #include "recordlab_host/common/logger.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -36,7 +37,7 @@ bool AgentProxy::isConnected() const {
     return connected_;
 }
 
-bool AgentProxy::launchOrConnect() {
+bool AgentProxy::launchOrConnect(int connect_timeout_ms) {
     if (connected_ && action_client_) return true;
 
     if (shouldLaunchLocalNode()) {
@@ -56,7 +57,7 @@ bool AgentProxy::launchOrConnect() {
         });
     }
 
-    connected_ = ensureClient();
+    connected_ = ensureClient(connect_timeout_ms);
     return connected_;
 }
 
@@ -111,16 +112,27 @@ void AgentProxy::startNodeProcess() {
         process_output_callback_);
 }
 
-bool AgentProxy::ensureClient() {
+bool AgentProxy::ensureClient(int connect_timeout_ms) {
     if (!action_client_) {
         action_client_ = std::make_unique<EchoActionClient>(
             config_.subnode_host, config_.goal_port, config_.feedback_port, 3000, config_.action_name + "_client");
     }
-    for (int attempt = 0; attempt < 20; ++attempt) {
-        if (action_client_->waitForServer(1000)) {
+    const int attempts = shouldLaunchLocalNode() ? 20 : 2;
+    const auto deadline = connect_timeout_ms > 0
+        ? std::chrono::steady_clock::now() + std::chrono::milliseconds(connect_timeout_ms)
+        : std::chrono::steady_clock::time_point::max();
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) return false;
+        const auto remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+        const int wait_ms = connect_timeout_ms > 0
+            ? static_cast<int>(std::max<long long>(1, std::min<long long>(1000, remaining_ms)))
+            : 1000;
+        if (action_client_->waitForServer(wait_ms)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
             return true;
         }
+        if (std::chrono::steady_clock::now() >= deadline) return false;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     return false;

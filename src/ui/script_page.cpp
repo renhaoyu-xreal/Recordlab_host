@@ -254,6 +254,7 @@ QWidget* ScriptPage::buildWorkflowPanel() {
 }
 
 void ScriptPage::clearWorkflow() {
+    showWorkflowTab();
     if (workflow_title_label_) workflow_title_label_->setText(QStringLiteral("暂无脚本流程"));
     if (workflow_message_label_) workflow_message_label_->setText(QStringLiteral("说明: --"));
     if (!workflow_steps_layout_) return;
@@ -264,12 +265,16 @@ void ScriptPage::clearWorkflow() {
     }
 }
 
-void ScriptPage::updateWorkflow(const QString& title, const QString& message,
-                                const QString& steps_json, bool finished, bool success) {
+void ScriptPage::showWorkflowTab() {
     if (output_tabs_ && workflow_panel_) {
         const int index = output_tabs_->indexOf(workflow_panel_);
         if (index >= 0) output_tabs_->setCurrentIndex(index);
     }
+}
+
+void ScriptPage::updateWorkflow(const QString& title, const QString& message,
+                                const QString& steps_json, bool finished, bool success) {
+    showWorkflowTab();
     if (workflow_title_label_) {
         workflow_title_label_->setText(QStringLiteral("%1 [%2]").arg(
             title.isEmpty() ? QStringLiteral("脚本流程") : title,

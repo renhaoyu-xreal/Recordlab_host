@@ -59,6 +59,23 @@ int main() {
     assert(event->type == recordlab::host::msg::DATA_REGISTERED);
     assert(event->payload["stream"]["data_name"] == "imu_data");
 
+    auto duplicate = callRegistry(port, {
+        {"action", "register_data"},
+        {"stream", {
+            {"data_name", "imu_data"},
+            {"data_type", "topic"},
+            {"host", "127.0.0.1"},
+            {"port", 16510},
+            {"node_name", "node"},
+            {"encoding", "json"},
+            {"parse_mode", "type_vector6_fast"},
+            {"ui_max_hz", 60.0},
+        }},
+    });
+    assert(duplicate.value("success", false));
+    auto duplicate_event = bus.waitFor(recordlab::host::msg::DATA_RECEIVER, 100);
+    assert(!duplicate_event.has_value());
+
     auto list = callRegistry(port, {{"action", "list_data"}});
     assert(list.value("success", false));
     assert(list["streams"].size() == 1);

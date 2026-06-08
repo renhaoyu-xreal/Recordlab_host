@@ -361,6 +361,10 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
     stream_label_by_key_.clear();
     label_key_by_label_.clear();
     list_row_by_label_.clear();
+    curve_history_.clear();
+    realtime_value_lines_.clear();
+    selected_data_name_.clear();
+    if (curve_widget_) curve_widget_->clearSeries();
     if (!data_selection_list_ || !custom_data_list_ || sensor_layout_.empty()) {
         return;
     }
@@ -386,6 +390,45 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
         if (topic == "imu_data" || !layout.is_object()) continue;
         const QString label = QString::fromStdString(layout.value("display_name", topic));
         addItem(custom_data_list_, label, QString::fromStdString(topic));
+    }
+    renderRealtimeValues();
+}
+
+void SensorWorkspaceWidget::resetTopicData(const QString& data_name) {
+    if (data_name.isEmpty()) {
+        return;
+    }
+    QStringList labels_to_clear;
+    if (data_name == QStringLiteral("imu_data")) {
+        for (const auto& [label, stream_key] : label_key_by_label_) {
+            if (stream_key.startsWith(QStringLiteral("imu_data:"))) {
+                labels_to_clear << label;
+            }
+        }
+    } else {
+        const auto label_it = stream_label_by_key_.find(data_name);
+        if (label_it != stream_label_by_key_.end()) {
+            labels_to_clear << label_it->second;
+        }
+    }
+    for (const auto& label : labels_to_clear) {
+        curve_history_.erase(label);
+        realtime_value_lines_.erase(label);
+        if (selected_data_name_ == label && curve_widget_) {
+            curve_widget_->clearSeries(label);
+        }
+    }
+    if (data_name == QStringLiteral("camera_data")) {
+        last_camera_shm_seq_ = {};
+        for (int i = 0; i < static_cast<int>(video_status_labels_.size()); ++i) {
+            if (video_status_labels_[static_cast<std::size_t>(i)]) {
+                setVideoStatus(i, QStringLiteral("图像 %1 | 等待图像流 | -- x --").arg(i + 1), true);
+            }
+            if (video_image_labels_[static_cast<std::size_t>(i)]) {
+                video_image_labels_[static_cast<std::size_t>(i)]->clear();
+                video_image_labels_[static_cast<std::size_t>(i)]->setText(QStringLiteral("图像 %1").arg(i + 1));
+            }
+        }
     }
     renderRealtimeValues();
 }
@@ -648,6 +691,13 @@ void SensorWorkspaceWidget::appendCurveSample(const QString& key, const nlohmann
     const double display_timestamp = timestamp > 0.0
         ? timestamp
         : (history.empty() ? 0.0 : history.back()[0] + 0.01);
+    if (!history.empty() &&
+        (display_timestamp < history.back()[0] - 1.0 || display_timestamp > history.back()[0] + 10.0)) {
+        history.clear();
+        if (selected_data_name_ == key && curve_widget_) {
+            curve_widget_->clearSeries(key);
+        }
+    }
     history.push_back({display_timestamp, x, y, z});
     while (history.size() > kMaxCurveSamples) {
         history.pop_front();

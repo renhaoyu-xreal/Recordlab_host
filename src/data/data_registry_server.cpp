@@ -60,9 +60,18 @@ void DataRegistryServer::stop() {
 }
 
 void DataRegistryServer::registerStatic(const DataStreamRegistration& registration) {
+    bool changed = true;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        streams_[keyFor(registration)] = registration;
+        const auto key = keyFor(registration);
+        const auto existing = streams_.find(key);
+        changed = existing == streams_.end() || toJson(existing->second) != toJson(registration);
+        if (changed) {
+            streams_[key] = registration;
+        }
+    }
+    if (!changed) {
+        return;
     }
     publishRegistryEvent(msg::DATA_REGISTERED, registration);
 }

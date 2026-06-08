@@ -5,6 +5,7 @@
 #include "recordlab_host/common/logger.h"
 #include "recordlab_host/ui/data_page.h"
 #include "recordlab_host/ui/entry_page.h"
+#include "recordlab_host/ui/sensor_workspace_widget.h"
 #include "recordlab_host/ui/script_page.h"
 #include "recordlab_host/ui/workspace_page.h"
 
@@ -37,6 +38,29 @@ bool isCheckLogMessage(const QString& message) {
         || trimmed == QStringLiteral("发送命令: check")
         || trimmed.startsWith(QStringLiteral("check:"))
         || trimmed.startsWith(QStringLiteral("check 失败:"));
+}
+
+bool workflowStepHasStatus(const nlohmann::json& payload,
+                           const std::string& step_key,
+                           const std::string& status) {
+    const auto steps_text = payload.value("steps_json", std::string("[]"));
+    const auto steps = nlohmann::json::parse(steps_text, nullptr, false);
+    if (!steps.is_array()) return false;
+    for (const auto& step : steps) {
+        if (step.value("key", std::string{}) == step_key &&
+            step.value("status", std::string{}) == status) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool jsonBoolValue(const nlohmann::json& object, const char* key, bool fallback = false) {
+    if (!object.is_object()) return fallback;
+    const auto it = object.find(key);
+    if (it == object.end() || it->is_null()) return fallback;
+    if (it->is_boolean()) return it->get<bool>();
+    return fallback;
 }
 
 QString replaceTemplateVars(QString text, const nlohmann::json& vars) {
@@ -205,14 +229,24 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         const QString name = QString::fromStdString(topic);
         if (first) appendLog(QStringLiteral("收到 topic: %1").arg(name));
         if (workspace_page_) {
+            if (first) {
+                workspace_page_->scriptPage()->sensorWorkspace()->resetTopicData(name);
+                workspace_page_->dataPage()->sensorWorkspace()->resetTopicData(name);
+            }
             workspace_page_->handleTopicData(name, value, freq);
         }
         applyUiBindings(topic, value);
         return;
     }
     if (m.type == msg::DATA_REGISTERED) {
+        const auto stream = m.payload.value("stream", nlohmann::json::object());
+        const QString data_name = QString::fromStdString(stream.value("data_name", std::string{}));
+        if (workspace_page_ && !data_name.isEmpty()) {
+            workspace_page_->scriptPage()->sensorWorkspace()->resetTopicData(data_name);
+            workspace_page_->dataPage()->sensorWorkspace()->resetTopicData(data_name);
+        }
         if (data_receiver_) {
-            data_receiver_->registerDataStream(dataStreamRegistrationFromJson(m.payload.value("stream", nlohmann::json::object())));
+            data_receiver_->registerDataStream(dataStreamRegistrationFromJson(stream));
         }
         return;
     }
@@ -265,6 +299,8 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
     if (m.type == msg::AGENT_ACTIVATED) {
         if (m.payload.value("success", false)) {
             const auto agent_name = m.payload.value("agent_name", std::string{});
+            active_agent_ = QString::fromStdString(agent_name);
+            active_agent_connected_ = true;
             if (watchdog_) watchdog_->setActiveAgent(agent_name);
             if (data_receiver_) {
                 const auto config = agent_manager_->loadAgentConfig(agent_name);
@@ -277,13 +313,39 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
                     }
                 }
             }
+        } else {
+            active_agent_connected_ = false;
         }
         return;
     }
 
     // ── ScriptsActuator messages ──
     if (m.type == msg::SCRIPT_FINISHED) {
+        pending_script_agents_.clear();
+        script_monitoring_started_ = false;
+        bus_.publish({
+            .source = msg::UI,
+            .target = msg::AGENT_MANAGER,
+            .type = msg::RELEASE_INACTIVE_AGENTS,
+        });
+        if (watchdog_) {
+            if (!active_agent_.trimmed().isEmpty()) {
+                watchdog_->setActiveAgent(active_agent_.toStdString());
+            } else {
+                watchdog_->clearActiveAgent();
+            }
+        }
         emit scriptFinished(m.payload.value("exit_code", -1));
+        return;
+    }
+    if (m.type == msg::SCRIPT_REQUIRED_AGENTS) {
+        pending_script_agents_.clear();
+        script_monitoring_started_ = false;
+        if (m.payload.contains("agent_names") && m.payload["agent_names"].is_array()) {
+            for (const auto& item : m.payload["agent_names"]) {
+                if (item.is_string()) pending_script_agents_.push_back(item.get<std::string>());
+            }
+        }
         return;
     }
     if (m.type == msg::SCRIPT_WORKFLOW) {
@@ -295,8 +357,13 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
                 QString::fromStdString(m.payload.value("title", std::string("脚本流程"))),
                 QString::fromStdString(m.payload.value("message", std::string{})),
                 QString::fromStdString(m.payload.value("steps_json", std::string("[]"))),
-                m.payload.value("finished", false),
-                m.payload.value("success", false));
+                jsonBoolValue(m.payload, "finished", false),
+                jsonBoolValue(m.payload, "success", false));
+            if (watchdog_ && !script_monitoring_started_ && !pending_script_agents_.empty() &&
+                workflowStepHasStatus(m.payload, "nodes_check", "success")) {
+                watchdog_->setMonitoredAgents(pending_script_agents_, true);
+                script_monitoring_started_ = true;
+            }
         }
         return;
     }
@@ -310,7 +377,6 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         return;
     }
     if (m.type == msg::SCRIPT_OUTPUT) {
-        appendLog(QString::fromStdString(m.payload.value("text", "")));
         return;
     }
 }
@@ -418,13 +484,13 @@ void MainWindow::handleDialogRequest(const HostMessage& m) {
 
 void MainWindow::activateAgent(const QString& agent_name) {
     try {
-        if (watchdog_) watchdog_->clearActiveAgent();
         active_agent_ = agent_name;
+        active_agent_connected_ = false;
+        if (watchdog_) watchdog_->setActiveAgent(agent_name.toStdString());
         bus_.publish({
             .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::ACTIVATE_AGENT,
             .payload = {{"agent_name", agent_name.toStdString()}},
         });
-        // Watchdog is already running; it binds to this agent after AGENT_ACTIVATED success.
     } catch (const std::exception& e) {
         reportQtException(QStringLiteral("activateAgent"), &e);
     } catch (...) {

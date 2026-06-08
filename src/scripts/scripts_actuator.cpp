@@ -63,6 +63,18 @@ QStringList jsonStringListValue(const nlohmann::json& object, const char* key) {
     return jsonStringList(*it);
 }
 
+int jsonTimeoutMs(const nlohmann::json& object) {
+    const auto timeout_ms = object.find("timeout_ms");
+    if (timeout_ms != object.end() && timeout_ms->is_number()) {
+        return static_cast<int>(timeout_ms->get<double>());
+    }
+    const auto timeout_s = object.find("timeout_s");
+    if (timeout_s != object.end() && timeout_s->is_number()) {
+        return static_cast<int>(timeout_s->get<double>() * 1000.0);
+    }
+    return 0;
+}
+
 }  // namespace
 
 ScriptsActuator::ScriptsActuator(HostMessageBus& bus, QString nodes_root,
@@ -297,14 +309,6 @@ void ScriptsActuator::processOutputLine(const QString& line, const std::string& 
         {"pid", pid},
         {"script_id", current_script_id_},
     });
-    publishToUI(msg::LOG_ENTRY, {
-        {"message", line.toStdString()},
-        {"stream", stream},
-        {"process", "script"},
-        {"script_path", current_script_path_},
-        {"pid", pid},
-        {"script_id", current_script_id_},
-    });
     common::Logger::instance().log(
         stream == "stderr" ? common::LogLevel::Warn : common::LogLevel::Info,
         "ScriptsActuator",
@@ -328,6 +332,7 @@ bool ScriptsActuator::handleRuntimeEvent(const QString& line) {
         if (type == "cmd_request") handleCommandRequestEvent(event);
         if (type == "create_directory") handleCreateDirectoryEvent(event);
         if (type == "workflow") handleWorkflowEvent(event);
+        if (type == "required_agents") publishToUI(msg::SCRIPT_REQUIRED_AGENTS, event);
     } catch (const std::exception& e) {
         publishToUI(msg::LOG_ENTRY, {{"message", std::string("runtime 事件解析失败: ") + e.what()}});
     } catch (...) {
@@ -349,6 +354,8 @@ void ScriptsActuator::handleDialogEvent(const nlohmann::json& event) {
 
 void ScriptsActuator::handleCommandRequestEvent(const nlohmann::json& event) {
     const std::string request_id = event.value("id", event.value("request_id", std::string{}));
+    const std::string cmd = event.value("cmd", std::string{});
+    const int timeout_ms = jsonTimeoutMs(event);
     bus_.publish({
         .request_id = request_id,
         .source = msg::SCRIPTS_ACTUATOR,
@@ -357,10 +364,11 @@ void ScriptsActuator::handleCommandRequestEvent(const nlohmann::json& event) {
         .payload = {
             {"request_id", request_id},
             {"agent_name", event.value("agent_name", current_agent_name_)},
-            {"cmd", event.value("cmd", std::string{})},
+            {"cmd", cmd},
             {"params", event.value("params", nlohmann::json::object())},
             {"priority", event.value("priority", std::string("normal"))},
-            {"silent", event.value("silent", false)},
+            {"silent", event.value("silent", true)},
+            {"timeout_ms", timeout_ms},
         },
     });
 }

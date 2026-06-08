@@ -26,6 +26,7 @@ public:
     void setDataRoot(const QString& data_root);
     QStringList selectedScripts() const;
     void clearWorkflow();
+    void showWorkflowTab();
     void updateWorkflow(const QString& title, const QString& message,
                         const QString& steps_json, bool finished, bool success);
 

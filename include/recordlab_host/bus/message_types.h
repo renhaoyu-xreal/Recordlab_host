@@ -13,6 +13,7 @@ constexpr const char* DATA_RECEIVER   = "data_receiver";
 // ── UI / lifecycle → AgentManager ──────────────────────────────
 constexpr const char* ACTIVATE_AGENT  = "activate_agent";   // payload: {agent_name}
 constexpr const char* SHUTDOWN_AGENT  = "shutdown_agent";    // payload: {}
+constexpr const char* RELEASE_INACTIVE_AGENTS = "release_inactive_agents"; // payload: {}
 
 // ── Agent commands → AgentManager ──────────────────────────────
 // Shared by UI, Watchdog and future script/master CLI callers.
@@ -40,6 +41,7 @@ constexpr const char* SCRIPT_STARTED  = "script_started";    // payload: {script
 constexpr const char* SCRIPT_OUTPUT   = "script_output";     // payload: {text, stream, process, script_path, pid, script_id}
 constexpr const char* SCRIPT_FINISHED = "script_finished";   // payload: {script_id, script_path, pid, exit_code}
 constexpr const char* SCRIPT_WORKFLOW = "script_workflow";   // payload: {action,title,message,steps,finished,success}
+constexpr const char* SCRIPT_REQUIRED_AGENTS = "script_required_agents"; // payload: {agent_names:[...]}
 
 // ── Process output → UI ───────────────────────────────────────
 constexpr const char* PROCESS_OUTPUT  = "process_output";    // payload: {text, stream, process, pid, agent_name, node_name}

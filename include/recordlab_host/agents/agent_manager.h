@@ -39,11 +39,15 @@ private:
     void handleMessage(const HostMessage& msg);
     void doActivateAgent(const std::string& agent_name);
     void doCmdRequest(const std::string& agent_name, const std::string& cmd,
-                      const nlohmann::json& params, bool silent);
+                      const nlohmann::json& params, bool silent, int timeout_ms = 0);
+    void doLocalScriptCommand(const AgentConfig& config, const std::string& cmd,
+                              const nlohmann::json& params, bool silent);
     void doShutdownAgent();
+    void doReleaseInactiveAgents();
 
     AgentProxy* activeAgent();
     AgentProxy* findAgent(const std::string& agent_name);
+    AgentProxy* ensureAgentConnected(const std::string& agent_name, int connect_timeout_ms = 0);
     AgentProxy& getOrCreateAgent(const AgentConfig& config);
     void publishResult(const std::string& type, nlohmann::json payload);
 
