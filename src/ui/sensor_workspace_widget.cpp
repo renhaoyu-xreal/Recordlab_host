@@ -99,6 +99,16 @@ QString frequencyText(double frequency) {
     return QStringLiteral("%1Hz").arg(frequency, 0, 'f', frequency >= 100.0 ? 0 : 1);
 }
 
+QString summaryLineForJson(const nlohmann::json& value) {
+    if (value.is_string()) {
+        return QString::fromStdString(value.get<std::string>());
+    }
+    if (value.is_null()) {
+        return QStringLiteral("--");
+    }
+    return QString::fromStdString(value.dump());
+}
+
 void setListItemText(QListWidget* list, int row, const QString& name, double frequency) {
     if (!list || row < 0 || row >= list->count()) {
         return;
@@ -145,6 +155,12 @@ public:
             }
         }
         setProperty("curve_sample_count", samples_.size());
+        if (!samples_.isEmpty()) {
+            const auto& latest = samples_.back();
+            setProperty("curve_latest_x", latest[1]);
+            setProperty("curve_latest_y", latest[2]);
+            setProperty("curve_latest_z", latest[3]);
+        }
         update();
     }
 
@@ -152,6 +168,9 @@ public:
         selected_data_name_ = data_name;
         samples_.clear();
         setProperty("curve_sample_count", 0);
+        setProperty("curve_latest_x", QVariant());
+        setProperty("curve_latest_y", QVariant());
+        setProperty("curve_latest_z", QVariant());
         update();
     }
 
@@ -284,8 +303,15 @@ protected:
                 points.push_back(QPointF(x, y));
             }
 
+            QPainterPath path;
+            if (!points.isEmpty()) {
+                path.moveTo(points.front());
+                for (int i = 1; i < points.size(); ++i) {
+                    path.lineTo(points[i]);
+                }
+            }
             painter.setPen(QPen(colors[axis], 2));
-            painter.drawPath(buildSmoothPath(points));
+            painter.drawPath(path);
             painter.setPen(QColor(QStringLiteral("#6b6b6b")));
             painter.drawText(QRect(chart_rect.left(), chart_rect.bottom() + 4, 72, 18),
                              Qt::AlignLeft | Qt::AlignVCenter,
@@ -308,56 +334,6 @@ protected:
 private:
     double sampleValue(const std::array<double, 4>& sample, int axis) const {
         return sample[static_cast<std::size_t>(axis + 1)];
-    }
-
-    QVector<QPointF> displaySmoothedPoints(const QVector<QPointF>& points) const {
-        if (points.size() < 12) {
-            return points;
-        }
-        const int radius = points.size() >= 180 ? 3 : 2;
-        QVector<QPointF> smoothed;
-        smoothed.reserve(points.size());
-        for (int i = 0; i < points.size(); ++i) {
-            const int begin = std::max(0, i - radius);
-            const int end = std::min(static_cast<int>(points.size()) - 1, i + radius);
-            qreal y_sum = 0.0;
-            int count = 0;
-            for (int j = begin; j <= end; ++j) {
-                y_sum += points[j].y();
-                ++count;
-            }
-            smoothed.push_back(QPointF(points[i].x(), y_sum / std::max(1, count)));
-        }
-        return smoothed;
-    }
-
-    QPainterPath buildSmoothPath(const QVector<QPointF>& raw_points) const {
-        const QVector<QPointF> points = displaySmoothedPoints(raw_points);
-        QPainterPath path;
-        if (points.isEmpty()) {
-            return path;
-        }
-        path.moveTo(points.front());
-        if (points.size() < 3) {
-            for (int i = 1; i < points.size(); ++i) {
-                path.lineTo(points[i]);
-            }
-            return path;
-        }
-        for (int i = 0; i < points.size() - 1; ++i) {
-            const QPointF& p0 = i > 0 ? points[i - 1] : points[i];
-            const QPointF& p1 = points[i];
-            const QPointF& p2 = points[i + 1];
-            const QPointF& p3 = (i + 2 < points.size()) ? points[i + 2] : p2;
-            const QPointF c1(
-                p1.x() + (p2.x() - p0.x()) / 6.0,
-                p1.y() + (p2.y() - p0.y()) / 6.0);
-            const QPointF c2(
-                p2.x() - (p3.x() - p1.x()) / 6.0,
-                p2.y() - (p3.y() - p1.y()) / 6.0);
-            path.cubicTo(c1, c2, p2);
-        }
-        return path;
     }
 
     QString selected_data_name_;
@@ -424,14 +400,24 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
     label_key_by_label_.clear();
     list_row_by_label_.clear();
     channel_stream_keys_.clear();
+    summary_only_labels_.clear();
+    summary_value_blocks_.clear();
+    realtime_value_lines_.clear();
+    smoothed_value_by_label_.clear();
     if (!data_selection_list_ || !custom_data_list_ || sensor_layout_.empty()) {
         return;
     }
     data_selection_list_->clear();
     custom_data_list_->clear();
-    const auto addItem = [&](QListWidget* list, const QString& label, const QString& stream_key) {
+    const auto addItem = [&](QListWidget* list, const QString& label, const QString& stream_key, bool summary_only) {
         const int row = list->count();
-        list->addItem(QStringLiteral("%1 [--Hz]").arg(label));
+        if (summary_only) {
+            list->addItem(label);
+            summary_only_labels_.insert(label);
+            summary_value_blocks_[label] = QStringLiteral("最新数据\n--\n更新时间: --");
+        } else {
+            list->addItem(QStringLiteral("%1 [--Hz]").arg(label));
+        }
         list_row_by_label_[label] = row;
         label_key_by_label_[label] = stream_key;
         stream_label_by_key_[stream_key] = label;
@@ -446,12 +432,13 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
                 const QString label = QString::fromStdString(channel.value("label", topic));
                 const QString stream_key = QStringLiteral("%1:%2").arg(QString::fromStdString(topic)).arg(type);
                 channel_stream_keys_.insert(stream_key);
-                addItem(data_selection_list_, label, stream_key);
+                addItem(data_selection_list_, label, stream_key, false);
             }
             continue;
         }
         const QString label = QString::fromStdString(layout.value("display_name", topic));
-        addItem(custom_data_list_, label, QString::fromStdString(topic));
+        const bool summary_only = layout.value("ui_widget", std::string{}) == "summary_value";
+        addItem(custom_data_list_, label, QString::fromStdString(topic), summary_only);
     }
     renderRealtimeValues();
 }
@@ -469,17 +456,21 @@ void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const n
         const QString label = configured_label == stream_label_by_key_.end()
             ? fallbackChannelLabel(data_name, type)
             : configured_label->second;
-        appendCurveSample(label, value);
+        const auto smoothed = appendCurveSample(label, value);
         QString value_text = QStringLiteral("type:%1 ").arg(type);
         if (value.contains("data") && value["data"].is_array() && !value["data"].empty()) {
             if (isTemperatureType(type) || isTemperatureLabel(label)) {
+                const double shown = smoothed ? (*smoothed)[0] : value["data"][0].get<double>();
                 value_text += QStringLiteral("temperature:%1")
-                            .arg(value["data"][0].get<double>(), 0, 'f', 2);
+                            .arg(shown, 0, 'f', 2);
             } else if (value["data"].size() >= 3) {
+                const double shown_x = smoothed ? (*smoothed)[0] : value["data"][0].get<double>();
+                const double shown_y = smoothed ? (*smoothed)[1] : value["data"][1].get<double>();
+                const double shown_z = smoothed ? (*smoothed)[2] : value["data"][2].get<double>();
                 value_text += QStringLiteral("x:%1 y:%2 z:%3")
-                        .arg(value["data"][0].get<double>(), 0, 'f', 3)
-                        .arg(value["data"][1].get<double>(), 0, 'f', 3)
-                        .arg(value["data"][2].get<double>(), 0, 'f', 3);
+                        .arg(shown_x, 0, 'f', 3)
+                        .arg(shown_y, 0, 'f', 3)
+                        .arg(shown_z, 0, 'f', 3);
             }
         }
         updateRealtimeValueLine(label, value_text.trimmed());
@@ -518,6 +509,36 @@ void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const n
     if (data_name == QStringLiteral("time_delay")) {
         return;
     }
+}
+
+void SensorWorkspaceWidget::handleSummaryData(const QString& data_name, const nlohmann::json& value) {
+    if (data_name.trimmed().isEmpty()) {
+        return;
+    }
+    QStringList lines;
+    lines << QStringLiteral("最新数据");
+
+    const auto latest_lines_it = value.find("latest_csv_lines");
+    if (latest_lines_it != value.end() && latest_lines_it->is_object() && !latest_lines_it->empty()) {
+        for (const auto& [file_name, latest_line] : latest_lines_it->items()) {
+            lines << QStringLiteral("%1: %2")
+                         .arg(QString::fromStdString(file_name), summaryLineForJson(latest_line));
+        }
+    } else {
+        lines << QStringLiteral("--");
+    }
+
+    QString update_time = QStringLiteral("--");
+    const auto update_time_it = value.find("latest_update_time");
+    if (update_time_it != value.end() && update_time_it->is_string()) {
+        const QString raw = QString::fromStdString(update_time_it->get<std::string>()).trimmed();
+        if (!raw.isEmpty()) {
+            update_time = raw;
+        }
+    }
+    lines << QStringLiteral("更新时间: %1").arg(update_time);
+
+    updateSummaryValueBlock(data_name, lines.join(QStringLiteral("\n")));
 }
 
 QWidget* SensorWorkspaceWidget::buildLeftPanel() {
@@ -694,9 +715,9 @@ void SensorWorkspaceWidget::updateSelectedDataFromItem(QListWidgetItem* item) {
     refreshSelectedCurves();
 }
 
-void SensorWorkspaceWidget::appendCurveSample(const QString& key, const nlohmann::json& value) {
+std::optional<std::array<double, 3>> SensorWorkspaceWidget::appendCurveSample(const QString& key, const nlohmann::json& value) {
     if (key.isEmpty()) {
-        return;
+        return std::nullopt;
     }
     auto& history = curve_history_[key];
     constexpr std::size_t kMaxCurveSamples = 600;
@@ -705,21 +726,38 @@ void SensorWorkspaceWidget::appendCurveSample(const QString& key, const nlohmann
     double y = 0.0;
     double z = 0.0;
     if (!jsonNumberAt(value, 0, x)) {
-        return;
+        return std::nullopt;
     }
     if (!isTemperatureType(type) && !isTemperatureLabel(key)) {
         if (!jsonNumberAt(value, 1, y) || !jsonNumberAt(value, 2, z)) {
-            return;
+            return std::nullopt;
         }
     }
     const double timestamp = value.value("timestamp", value.value("timestamp_ns", 0.0) / 1e9);
     const double display_timestamp = timestamp > 0.0
         ? timestamp
         : (history.empty() ? 0.0 : history.back()[0] + 0.01);
-    history.push_back({display_timestamp, x, y, z});
+    if (!history.empty() && display_timestamp < history.back()[0] - 1.0) {
+        history.clear();
+        smoothed_value_by_label_.erase(key);
+    }
+
+    const std::array<double, 3> raw{x, y, z};
+    auto smooth_it = smoothed_value_by_label_.find(key);
+    std::array<double, 3> smoothed = raw;
+    if (smooth_it != smoothed_value_by_label_.end()) {
+        const double alpha = isTemperatureType(type) || isTemperatureLabel(key) ? 0.55 : 0.22;
+        for (std::size_t i = 0; i < smoothed.size(); ++i) {
+            smoothed[i] = smooth_it->second[i] + alpha * (raw[i] - smooth_it->second[i]);
+        }
+    }
+    smoothed_value_by_label_[key] = smoothed;
+
+    history.push_back({display_timestamp, smoothed[0], smoothed[1], smoothed[2]});
     while (history.size() > kMaxCurveSamples) {
         history.pop_front();
     }
+    return smoothed;
 }
 
 void SensorWorkspaceWidget::updateRealtimeValueLine(const QString& label, const QString& value_text) {
@@ -727,6 +765,16 @@ void SensorWorkspaceWidget::updateRealtimeValueLine(const QString& label, const 
         return;
     }
     realtime_value_lines_[label] = value_text.isEmpty() ? QStringLiteral("--") : value_text;
+    renderRealtimeValues();
+}
+
+void SensorWorkspaceWidget::updateSummaryValueBlock(const QString& label, const QString& value_text) {
+    if (label.isEmpty()) {
+        return;
+    }
+    summary_value_blocks_[label] = value_text.trimmed().isEmpty()
+        ? QStringLiteral("最新数据\n--\n更新时间: --")
+        : value_text;
     renderRealtimeValues();
 }
 
@@ -741,7 +789,23 @@ void SensorWorkspaceWidget::renderRealtimeValues() {
             labels << dataNameFromListText(data_selection_list_->item(row)->text());
         }
     }
+    if (custom_data_list_ && custom_data_list_->count() > 0) {
+        for (int row = 0; row < custom_data_list_->count(); ++row) {
+            const QString label = dataNameFromListText(custom_data_list_->item(row)->text());
+            if (summary_only_labels_.find(label) != summary_only_labels_.end()) {
+                labels << label;
+            }
+        }
+    }
     for (const auto& label : labels) {
+        if (summary_only_labels_.find(label) != summary_only_labels_.end()) {
+            const auto summary_it = summary_value_blocks_.find(label);
+            lines << label;
+            lines << (summary_it != summary_value_blocks_.end()
+                ? summary_it->second
+                : QStringLiteral("最新数据\n--\n更新时间: --"));
+            continue;
+        }
         const auto it = realtime_value_lines_.find(label);
         QString value_text;
         if (it != realtime_value_lines_.end()) {

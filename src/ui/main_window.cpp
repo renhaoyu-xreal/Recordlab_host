@@ -5,6 +5,7 @@
 #include "recordlab_host/common/logger.h"
 #include "recordlab_host/ui/data_page.h"
 #include "recordlab_host/ui/entry_page.h"
+#include "recordlab_host/ui/sensor_workspace_widget.h"
 #include "recordlab_host/ui/script_page.h"
 #include "recordlab_host/ui/workspace_page.h"
 
@@ -26,6 +27,7 @@
 
 #include <exception>
 #include <cstdlib>
+#include <algorithm>
 
 namespace recordlab::host::ui {
 
@@ -41,6 +43,26 @@ bool isCheckLogMessage(const QString& message) {
         || trimmed == QStringLiteral("发送命令: check")
         || trimmed.startsWith(QStringLiteral("check:"))
         || trimmed.startsWith(QStringLiteral("check 失败:"));
+}
+
+bool extractSummaryPollConfig(const nlohmann::json& sensor_layout,
+                              QString& summary_data_name,
+                              int& poll_interval_ms) {
+    if (!sensor_layout.is_object()) {
+        return false;
+    }
+    for (const auto& [topic, layout] : sensor_layout.items()) {
+        if (!layout.is_object()) {
+            continue;
+        }
+        if (layout.value("ui_widget", std::string{}) != "summary_value") {
+            continue;
+        }
+        summary_data_name = QString::fromStdString(layout.value("display_name", topic));
+        poll_interval_ms = std::max(200, layout.value("poll_interval_ms", 1000));
+        return !summary_data_name.trimmed().isEmpty();
+    }
+    return false;
 }
 
 QString replaceTemplateVars(QString text, const nlohmann::json& vars) {
@@ -214,6 +236,18 @@ MainWindow::MainWindow(std::string agents_config_path,
     });
     bus_poll_timer_->start();
 
+    summary_poll_timer_ = new QTimer(this);
+    summary_poll_timer_->setInterval(1000);
+    connect(summary_poll_timer_, &QTimer::timeout, this, [this]() {
+        try {
+            pollAgentSummary();
+        } catch (const std::exception& e) {
+            reportQtException(QStringLiteral("pollAgentSummary"), &e);
+        } catch (...) {
+            reportQtException(QStringLiteral("pollAgentSummary"));
+        }
+    });
+
     // ── UI ─────────────────────────────────────────────────────
     stack_ = new QStackedWidget(this);
     entry_page_ = new EntryPage(stack_);
@@ -324,6 +358,9 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
 
     // ── AgentManager messages ──
     if (m.type == msg::CMD_RESULT) {
+        if (handleSummaryCmdResult(m)) {
+            return;
+        }
         if (isCheckCommand(m.payload.value("cmd", std::string{}))) {
             return;
         }
@@ -370,6 +407,7 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
                     }
                 }
             }
+            updateSummaryPollingForActiveAgent();
         }
         return;
     }
@@ -518,6 +556,11 @@ void MainWindow::handleDialogRequest(const HostMessage& m) {
 void MainWindow::activateAgent(const QString& agent_name) {
     try {
         if (watchdog_) watchdog_->clearActiveAgent();
+        if (summary_poll_timer_) {
+            summary_poll_timer_->stop();
+        }
+        summary_request_id_.clear();
+        summary_data_name_.clear();
         active_agent_ = agent_name;
         bus_.publish({
             .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::ACTIVATE_AGENT,
@@ -529,6 +572,82 @@ void MainWindow::activateAgent(const QString& agent_name) {
     } catch (...) {
         reportQtException(QStringLiteral("activateAgent"));
     }
+}
+
+void MainWindow::updateSummaryPollingForActiveAgent() {
+    if (!summary_poll_timer_) {
+        return;
+    }
+    summary_poll_timer_->stop();
+    summary_request_id_.clear();
+    summary_data_name_.clear();
+    summary_poll_interval_ms_ = 1000;
+    if (active_agent_.trimmed().isEmpty() || !agent_manager_) {
+        return;
+    }
+    try {
+        const auto config = agent_manager_->loadAgentConfig(active_agent_.toStdString());
+        if (!extractSummaryPollConfig(config.sensor_layout, summary_data_name_, summary_poll_interval_ms_)) {
+            return;
+        }
+        summary_poll_timer_->setInterval(summary_poll_interval_ms_);
+        pollAgentSummary();
+        summary_poll_timer_->start();
+    } catch (...) {
+    }
+}
+
+void MainWindow::pollAgentSummary() {
+    if (active_agent_.trimmed().isEmpty() || summary_data_name_.trimmed().isEmpty()) {
+        return;
+    }
+    const QString request_id = QStringLiteral("summary_%1")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    summary_request_id_ = request_id;
+    bus_.publish({
+        .request_id = request_id.toStdString(),
+        .source = msg::UI,
+        .target = msg::AGENT_MANAGER,
+        .type = msg::CMD_REQUEST,
+        .payload = {
+            {"request_id", request_id.toStdString()},
+            {"agent_name", active_agent_.toStdString()},
+            {"cmd", "get_runtime_state"},
+            {"params", nlohmann::json::object()},
+            {"priority", "normal"},
+            {"silent", true},
+        },
+    });
+}
+
+bool MainWindow::handleSummaryCmdResult(const HostMessage& m) {
+    const std::string request_id = m.request_id.empty()
+        ? m.payload.value("request_id", std::string{})
+        : m.request_id;
+    if (summary_request_id_.trimmed().isEmpty()
+        || QString::fromStdString(request_id) != summary_request_id_) {
+        return false;
+    }
+    summary_request_id_.clear();
+    if (!workspace_page_ || summary_data_name_.trimmed().isEmpty()) {
+        return true;
+    }
+    if (!m.payload.value("success", false)) {
+        return true;
+    }
+    nlohmann::json summary = nlohmann::json::object();
+    if (m.payload.contains("result") && m.payload["result"].is_object()) {
+        summary = m.payload["result"];
+    }
+    if (summary.empty()) {
+        summary = m.payload;
+    }
+    if (!summary.contains("latest_update_time")) {
+        summary["latest_update_time"] = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss")).toStdString();
+    }
+    workspace_page_->scriptPage()->sensorWorkspace()->handleSummaryData(summary_data_name_, summary);
+    workspace_page_->dataPage()->sensorWorkspace()->handleSummaryData(summary_data_name_, summary);
+    return true;
 }
 
 void MainWindow::sendCommand(const QString& cmd, const QString& params_json) {
@@ -594,6 +713,9 @@ void MainWindow::stopScript() {
 
 void MainWindow::shutdown() {
     try {
+        if (summary_poll_timer_) {
+            summary_poll_timer_->stop();
+        }
         if (watchdog_) {
             watchdog_->stop();
             watchdog_.reset();

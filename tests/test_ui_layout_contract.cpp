@@ -240,6 +240,14 @@ int main(int argc, char** argv) {
     require(curve_plot->property("curve_sample_count").toInt() == 1,
             "android selected curve should expose sample");
     script_workspace->handleRealtimeData(QStringLiteral("android_imu_data"), nlohmann::json{
+        {"type", 2},
+        {"data", {17.0, 18.0, 19.0, 0.0, 0.0, 0.0}},
+    }, 100.0);
+    QApplication::processEvents();
+    const double smoothed_acc_x = curve_plot->property("curve_latest_x").toDouble();
+    require(smoothed_acc_x > 7.0 && smoothed_acc_x < 17.0,
+            "android acc curve should store smoothed display data, not raw jump");
+    script_workspace->handleRealtimeData(QStringLiteral("android_imu_data"), nlohmann::json{
         {"type", 12},
         {"data", {36.5, 0.0, 0.0, 0.0, 0.0, 0.0}},
     }, 1.0);
@@ -253,6 +261,40 @@ int main(int argc, char** argv) {
             "android temperature selected data should follow curve title");
     require(curve_plot->property("curve_sample_count").toInt() == 1,
             "android temperature curve should expose sample");
+
+    workspace->configureSensorLayout(nlohmann::json{
+        {"nebula_latest_csv", {
+            {"display_name", "Nebula 最新数据"},
+            {"ui_widget", "summary_value"},
+            {"poll_interval_ms", 1000}
+        }},
+    });
+    require(script_workspace->customDataList()->count() == 1,
+            "nebula summary row should appear in custom data list");
+    require(script_workspace->customDataList()->item(0)->text() == QStringLiteral("Nebula 最新数据"),
+            "nebula summary row text mismatch");
+    script_workspace->handleSummaryData(QStringLiteral("Nebula 最新数据"), nlohmann::json{
+        {"latest_csv_lines", {
+            {"air_data.csv", "air_last_row"},
+            {"mobile_data.csv", "mobile_last_row"},
+        }},
+        {"latest_update_time", "12:34:56"},
+    });
+    const QString nebula_text = script_workspace->realtimeValueView()->toPlainText();
+    require(nebula_text.contains(QStringLiteral("Nebula 最新数据")),
+            "nebula summary title missing in realtime panel");
+    require(nebula_text.contains(QStringLiteral("air_data.csv: air_last_row")),
+            "nebula air latest row missing");
+    require(nebula_text.contains(QStringLiteral("mobile_data.csv: mobile_last_row")),
+            "nebula mobile latest row missing");
+    require(nebula_text.contains(QStringLiteral("更新时间: 12:34:56")),
+            "nebula summary update time missing");
+    script_workspace->customDataList()->setCurrentRow(0);
+    QApplication::processEvents();
+    require(curve_group->title() == QStringLiteral("传感器数据曲线: Nebula 最新数据"),
+            "nebula selected data should follow curve title");
+    require(curve_plot->property("curve_sample_count").toInt() == 0,
+            "nebula summary should not create curve samples");
 
     auto* data_workspace = workspace->dataPage()->sensorWorkspace();
     require(data_workspace->findChild<QWidget*>("video_panel_1") != nullptr, "data page video panel missing");

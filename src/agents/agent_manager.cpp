@@ -211,6 +211,7 @@ void AgentManager::doCmdRequest(const std::string& agent_name, const std::string
             {"cmd", cmd},
             {"success", result.success},
             {"message", message},
+            {"result", result.result},
         });
         if (!silent) {
             publishResult(msg::LOG_ENTRY, {{"message", cmd + ": " + message}});
@@ -227,6 +228,7 @@ void AgentManager::doCmdRequest(const std::string& agent_name, const std::string
             {"cmd", cmd},
             {"success", false},
             {"message", e.what()},
+            {"result", nlohmann::json::object()},
         });
         if (!silent) {
             publishResult(msg::LOG_ENTRY, {{"message", cmd + " 失败: " + std::string(e.what())}});
