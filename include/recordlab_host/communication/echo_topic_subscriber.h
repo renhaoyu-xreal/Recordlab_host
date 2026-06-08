@@ -7,6 +7,20 @@
 #include <subscriber.h>
 #include <nlohmann/json.hpp>
 
+namespace echo {
+
+// Compatibility shim for echo_message_system revisions that do not expose
+// SubscriberOptions yet. Host keeps parsing QoS metadata, but the current
+// fixed-port Subscriber implementation only accepts topic/host/port/callback.
+struct SubscriberOptions {
+    int receive_high_water_mark = 0;
+    int linger_ms = 0;
+    bool deliver_latest_only = false;
+    int drain_limit = 4000;
+};
+
+}  // namespace echo
+
 namespace recordlab::host {
 
 class EchoTopicSubscriber {

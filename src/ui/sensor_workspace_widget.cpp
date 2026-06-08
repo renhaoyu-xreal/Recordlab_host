@@ -76,8 +76,20 @@ QString imuLabelForType(int type) {
     }
 }
 
+QString fallbackChannelLabel(const QString& topic, int type) {
+    if (topic == QStringLiteral("imu_data")) {
+        return imuLabelForType(type);
+    }
+    return QStringLiteral("%1:%2").arg(topic).arg(type);
+}
+
 bool isTemperatureType(int type) {
     return type == 12 || type == 13;
+}
+
+bool isTemperatureLabel(const QString& label) {
+    return label.contains(QStringLiteral("temperature"), Qt::CaseInsensitive)
+        || label.contains(QStringLiteral("温度"));
 }
 
 QString frequencyText(double frequency) {
@@ -146,7 +158,7 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, false);
+        painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setRenderHint(QPainter::TextAntialiasing, true);
         painter.fillRect(rect(), QColor(QStringLiteral("#fafafa")));
 
@@ -258,7 +270,8 @@ protected:
                 painter.drawLine(x, chart_rect.top(), x, chart_rect.bottom());
             }
 
-            QPainterPath path;
+            QVector<QPointF> points;
+            points.reserve(samples_.size());
             for (int i = 0; i < samples_.size(); ++i) {
                 const auto& sample = samples_[i];
                 const double relative_timestamp = std::max(0.0, sample[0] - visible_start);
@@ -268,12 +281,11 @@ protected:
                 const double value_ratio = denominator <= 1e-9 ? 0.5 : (value - min_value) / denominator;
                 const qreal x = chart_rect.left() + time_ratio * chart_rect.width();
                 const qreal y = chart_rect.bottom() - value_ratio * chart_rect.height();
-                if (i == 0) path.moveTo(x, y);
-                else path.lineTo(x, y);
+                points.push_back(QPointF(x, y));
             }
 
             painter.setPen(QPen(colors[axis], 2));
-            painter.drawPath(path);
+            painter.drawPath(buildSmoothPath(points));
             painter.setPen(QColor(QStringLiteral("#6b6b6b")));
             painter.drawText(QRect(chart_rect.left(), chart_rect.bottom() + 4, 72, 18),
                              Qt::AlignLeft | Qt::AlignVCenter,
@@ -296,6 +308,56 @@ protected:
 private:
     double sampleValue(const std::array<double, 4>& sample, int axis) const {
         return sample[static_cast<std::size_t>(axis + 1)];
+    }
+
+    QVector<QPointF> displaySmoothedPoints(const QVector<QPointF>& points) const {
+        if (points.size() < 12) {
+            return points;
+        }
+        const int radius = points.size() >= 180 ? 3 : 2;
+        QVector<QPointF> smoothed;
+        smoothed.reserve(points.size());
+        for (int i = 0; i < points.size(); ++i) {
+            const int begin = std::max(0, i - radius);
+            const int end = std::min(static_cast<int>(points.size()) - 1, i + radius);
+            qreal y_sum = 0.0;
+            int count = 0;
+            for (int j = begin; j <= end; ++j) {
+                y_sum += points[j].y();
+                ++count;
+            }
+            smoothed.push_back(QPointF(points[i].x(), y_sum / std::max(1, count)));
+        }
+        return smoothed;
+    }
+
+    QPainterPath buildSmoothPath(const QVector<QPointF>& raw_points) const {
+        const QVector<QPointF> points = displaySmoothedPoints(raw_points);
+        QPainterPath path;
+        if (points.isEmpty()) {
+            return path;
+        }
+        path.moveTo(points.front());
+        if (points.size() < 3) {
+            for (int i = 1; i < points.size(); ++i) {
+                path.lineTo(points[i]);
+            }
+            return path;
+        }
+        for (int i = 0; i < points.size() - 1; ++i) {
+            const QPointF& p0 = i > 0 ? points[i - 1] : points[i];
+            const QPointF& p1 = points[i];
+            const QPointF& p2 = points[i + 1];
+            const QPointF& p3 = (i + 2 < points.size()) ? points[i + 2] : p2;
+            const QPointF c1(
+                p1.x() + (p2.x() - p0.x()) / 6.0,
+                p1.y() + (p2.y() - p0.y()) / 6.0);
+            const QPointF c2(
+                p2.x() - (p3.x() - p1.x()) / 6.0,
+                p2.y() - (p3.y() - p1.y()) / 6.0);
+            path.cubicTo(c1, c2, p2);
+        }
+        return path;
     }
 
     QString selected_data_name_;
@@ -361,6 +423,7 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
     stream_label_by_key_.clear();
     label_key_by_label_.clear();
     list_row_by_label_.clear();
+    channel_stream_keys_.clear();
     if (!data_selection_list_ || !custom_data_list_ || sensor_layout_.empty()) {
         return;
     }
@@ -373,17 +436,20 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
         label_key_by_label_[label] = stream_key;
         stream_label_by_key_[stream_key] = label;
     };
-    const auto imu = sensor_layout_.find("imu_data");
-    if (imu != sensor_layout_.end() && imu->is_object()) {
-        for (const auto& channel : imu->value("channels", nlohmann::json::array())) {
-            if (!channel.is_object()) continue;
-            const int type = channel.value("type", 0);
-            const QString label = QString::fromStdString(channel.value("label", std::string("imu_data")));
-            addItem(data_selection_list_, label, QStringLiteral("imu_data:%1").arg(type));
-        }
-    }
     for (const auto& [topic, layout] : sensor_layout_.items()) {
-        if (topic == "imu_data" || !layout.is_object()) continue;
+        if (!layout.is_object()) continue;
+        const auto channels = layout.find("channels");
+        if (channels != layout.end() && channels->is_array()) {
+            for (const auto& channel : *channels) {
+                if (!channel.is_object()) continue;
+                const int type = channel.value("type", 0);
+                const QString label = QString::fromStdString(channel.value("label", topic));
+                const QString stream_key = QStringLiteral("%1:%2").arg(QString::fromStdString(topic)).arg(type);
+                channel_stream_keys_.insert(stream_key);
+                addItem(data_selection_list_, label, stream_key);
+            }
+            continue;
+        }
         const QString label = QString::fromStdString(layout.value("display_name", topic));
         addItem(custom_data_list_, label, QString::fromStdString(topic));
     }
@@ -392,17 +458,21 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
 
 void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const nlohmann::json& value, double frequency) {
     updateFrequencyLabels(data_name, value, frequency);
-    if (data_name == QStringLiteral("imu_data") && value.is_object()) {
+    if (value.is_object()) {
         const int type = value.value("type", 0);
-        const QString stream_key = QStringLiteral("imu_data:%1").arg(type);
+        const QString stream_key = QStringLiteral("%1:%2").arg(data_name).arg(type);
         const auto configured_label = stream_label_by_key_.find(stream_key);
+        if (configured_label == stream_label_by_key_.end()
+            && channel_stream_keys_.find(stream_key) == channel_stream_keys_.end()) {
+            // This object is not a configured typed sensor stream.
+        } else {
         const QString label = configured_label == stream_label_by_key_.end()
-            ? imuLabelForType(type)
+            ? fallbackChannelLabel(data_name, type)
             : configured_label->second;
         appendCurveSample(label, value);
         QString value_text = QStringLiteral("type:%1 ").arg(type);
         if (value.contains("data") && value["data"].is_array() && !value["data"].empty()) {
-            if (isTemperatureType(type)) {
+            if (isTemperatureType(type) || isTemperatureLabel(label)) {
                 value_text += QStringLiteral("temperature:%1")
                             .arg(value["data"][0].get<double>(), 0, 'f', 2);
             } else if (value["data"].size() >= 3) {
@@ -421,6 +491,7 @@ void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const n
             }
         }
         return;
+        }
     }
     if (data_name == QStringLiteral("camera_data") && value.is_object()) {
         handleCameraData(value);
@@ -583,21 +654,18 @@ void SensorWorkspaceWidget::updateFrequencyLabels(const QString& data_name, cons
                     if (label_it == stream_label_by_key_.end()) continue;
                     const auto row_it = list_row_by_label_.find(label_it->second);
                     if (row_it == list_row_by_label_.end()) continue;
-                    QListWidget* list = stream_key.startsWith(QStringLiteral("imu_data:"))
+                    QListWidget* list = channel_stream_keys_.find(stream_key) != channel_stream_keys_.end()
                         ? data_selection_list_
                         : custom_data_list_;
                     setListItemText(list, row_it->second, label_it->second, frequency_value.get<double>());
-                }
-                if (data_name != QStringLiteral("imu_data")) {
-                    return;
                 }
             }
         }
     }
 
     QString stream_key = data_name;
-    if (data_name == QStringLiteral("imu_data") && value.is_object()) {
-        stream_key = QStringLiteral("imu_data:%1").arg(value.value("type", 0));
+    if (value.is_object() && value.contains("type")) {
+        stream_key = QStringLiteral("%1:%2").arg(data_name).arg(value.value("type", 0));
     }
     const auto label_it = stream_label_by_key_.find(stream_key);
     if (label_it == stream_label_by_key_.end()) {
@@ -607,7 +675,7 @@ void SensorWorkspaceWidget::updateFrequencyLabels(const QString& data_name, cons
     if (row_it == list_row_by_label_.end()) {
         return;
     }
-    QListWidget* list = stream_key.startsWith(QStringLiteral("imu_data:"))
+    QListWidget* list = channel_stream_keys_.find(stream_key) != channel_stream_keys_.end()
         ? data_selection_list_
         : custom_data_list_;
     setListItemText(list, row_it->second, label_it->second, frequency);
@@ -639,7 +707,7 @@ void SensorWorkspaceWidget::appendCurveSample(const QString& key, const nlohmann
     if (!jsonNumberAt(value, 0, x)) {
         return;
     }
-    if (!isTemperatureType(type)) {
+    if (!isTemperatureType(type) && !isTemperatureLabel(key)) {
         if (!jsonNumberAt(value, 1, y) || !jsonNumberAt(value, 2, z)) {
             return;
         }
@@ -702,7 +770,7 @@ void SensorWorkspaceWidget::refreshSelectedCurves() {
         return;
     }
     curve_widget_->setSeries(selected_data_name_, history_it->second,
-                             selected_data_name_.contains(QStringLiteral("temperature")));
+                             isTemperatureLabel(selected_data_name_));
 }
 
 void SensorWorkspaceWidget::handleCameraData(const nlohmann::json& value) {

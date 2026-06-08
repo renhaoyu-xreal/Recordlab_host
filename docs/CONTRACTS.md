@@ -146,6 +146,7 @@ AgentProxy 只负责传输命令。命令的具体实现属于节点。
 | Topic           | 生产者      | 消费者          | 编码          |
 | --------------- | ----------- | --------------- | ------------- |
 | `imu_data`      | Python 节点 | DataReceiver/UI | `json`        |
+| `android_imu_data` | Python 节点 | DataReceiver/UI | `json`        |
 | `camera_data`   | Python 节点 | DataReceiver/UI | `json_binary` |
 | `record_timer`  | Python 节点 | DataReceiver/UI | `json`        |
 | `time_delay`    | Python 节点 | DataReceiver/UI | `json`        |

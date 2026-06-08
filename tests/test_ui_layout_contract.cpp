@@ -204,6 +204,56 @@ int main(int argc, char** argv) {
     require(saw_camera_status, "camera frame status missing");
     require(curve_group->title() == QStringLiteral("传感器数据曲线: IMU0-gyro"), "camera frames should not change selected data");
 
+    workspace->configureSensorLayout(nlohmann::json{
+        {"android_imu_data", {
+            {"channels", {
+                {{"type", 1}, {"label", "gyro"}},
+                {{"type", 2}, {"label", "acc"}},
+                {{"type", 3}, {"label", "mag"}},
+                {{"type", 12}, {"label", "temperature"}},
+            }},
+        }},
+        {"record_timer", {{"display_name", "record_timer"}, {"ui_widget", "value"}}},
+    });
+    require(script_workspace->dataSelectionList()->count() == 4,
+            "android channel rows should appear in data selection");
+    require(script_workspace->dataSelectionList()->item(0)->text() == QStringLiteral("gyro [--Hz]"),
+            "android gyro row missing");
+    require(script_workspace->dataSelectionList()->item(1)->text() == QStringLiteral("acc [--Hz]"),
+            "android acc row missing");
+    require(script_workspace->dataSelectionList()->item(2)->text() == QStringLiteral("mag [--Hz]"),
+            "android mag row missing");
+    require(script_workspace->dataSelectionList()->item(3)->text() == QStringLiteral("temperature [--Hz]"),
+            "android temperature row missing");
+    script_workspace->handleRealtimeData(QStringLiteral("android_imu_data"), nlohmann::json{
+        {"type", 2},
+        {"data", {7.0, 8.0, 9.0, 0.0, 0.0, 0.0}},
+    }, 100.0);
+    require(script_workspace->dataSelectionList()->item(1)->text() == QStringLiteral("acc [100Hz]"),
+            "android acc live rate missing");
+    require(script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("acc type:2 x:7.000 y:8.000 z:9.000")),
+            "android acc realtime value missing");
+    script_workspace->dataSelectionList()->setCurrentRow(1);
+    QApplication::processEvents();
+    require(curve_group->title() == QStringLiteral("传感器数据曲线: acc"),
+            "android selected data should follow curve title");
+    require(curve_plot->property("curve_sample_count").toInt() == 1,
+            "android selected curve should expose sample");
+    script_workspace->handleRealtimeData(QStringLiteral("android_imu_data"), nlohmann::json{
+        {"type", 12},
+        {"data", {36.5, 0.0, 0.0, 0.0, 0.0, 0.0}},
+    }, 1.0);
+    require(script_workspace->dataSelectionList()->item(3)->text() == QStringLiteral("temperature [1.0Hz]"),
+            "android temperature live rate missing");
+    require(script_workspace->realtimeValueView()->toPlainText().contains(QStringLiteral("temperature type:12 temperature:36.50")),
+            "android temperature realtime value missing");
+    script_workspace->dataSelectionList()->setCurrentRow(3);
+    QApplication::processEvents();
+    require(curve_group->title() == QStringLiteral("传感器数据曲线: temperature"),
+            "android temperature selected data should follow curve title");
+    require(curve_plot->property("curve_sample_count").toInt() == 1,
+            "android temperature curve should expose sample");
+
     auto* data_workspace = workspace->dataPage()->sensorWorkspace();
     require(data_workspace->findChild<QWidget*>("video_panel_1") != nullptr, "data page video panel missing");
     require(data_workspace->findChild<QWidget*>("curve_plot_widget") != nullptr, "data page curve plot missing");

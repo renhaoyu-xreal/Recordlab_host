@@ -12,6 +12,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <set>
 
 class QLabel;
 class QGroupBox;
@@ -75,6 +76,7 @@ private:
     std::map<QString, QString> stream_label_by_key_;
     std::map<QString, QString> label_key_by_label_;
     std::map<QString, int> list_row_by_label_;
+    std::set<QString> channel_stream_keys_;
 };
 
 }  // namespace recordlab::host::ui

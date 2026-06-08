@@ -95,6 +95,7 @@ EchoTopicSubscriber::EchoTopicSubscriber(std::string host,
                                          Callback callback)
     : topic_(std::move(topic)), encoding_(std::move(encoding)),
       parse_mode_(std::move(parse_mode)), callback_(std::move(callback)) {
+    (void)options;
     subscriber_ = std::make_unique<echo::Subscriber>(
         topic_, host, port,
         [this](const std::string& payload) {
@@ -113,8 +114,7 @@ EchoTopicSubscriber::EchoTopicSubscriber(std::string host,
                 {"message", "non-json topic payload received"},
             });
         },
-        true,
-        options);
+        true);
 }
 
 EchoTopicSubscriber::~EchoTopicSubscriber() {

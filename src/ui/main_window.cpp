@@ -10,7 +10,10 @@
 
 #include <QComboBox>
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
+#include <QFormLayout>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -19,6 +22,7 @@
 #include <QPushButton>
 #include <QUuid>
 #include <QStackedWidget>
+#include <QVBoxLayout>
 
 #include <exception>
 #include <cstdlib>
@@ -51,6 +55,95 @@ QString replaceTemplateVars(QString text, const nlohmann::json& vars) {
         text.replace(QStringLiteral("${%1}").arg(QString::fromStdString(key)), replacement);
     }
     return text;
+}
+
+QString jsonToQString(const nlohmann::json& value, const QString& fallback = {}) {
+    if (value.is_string()) return QString::fromStdString(value.get<std::string>());
+    if (value.is_boolean()) return value.get<bool>() ? QStringLiteral("true") : QStringLiteral("false");
+    if (value.is_number_integer()) return QString::number(value.get<long long>());
+    if (value.is_number_unsigned()) return QString::number(value.get<unsigned long long>());
+    if (value.is_number_float()) return QString::number(value.get<double>());
+    if (!value.is_null()) return QString::fromStdString(value.dump());
+    return fallback;
+}
+
+bool jsonBoolValue(const nlohmann::json& object, const char* key, bool fallback = false) {
+    if (!object.is_object()) return fallback;
+    const auto it = object.find(key);
+    if (it == object.end() || it->is_null()) return fallback;
+    if (it->is_boolean()) return it->get<bool>();
+    if (it->is_number_integer()) return it->get<long long>() != 0;
+    if (it->is_number_unsigned()) return it->get<unsigned long long>() != 0;
+    if (it->is_string()) {
+        const auto value = QString::fromStdString(it->get<std::string>()).trimmed().toLower();
+        if (value == QStringLiteral("true") || value == QStringLiteral("1")) return true;
+        if (value == QStringLiteral("false") || value == QStringLiteral("0")) return false;
+    }
+    return fallback;
+}
+
+nlohmann::json showMultiFieldInputDialog(QWidget* parent,
+                                         const QString& title,
+                                         const QString& message,
+                                         const nlohmann::json& fields,
+                                         bool* accepted) {
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+    auto* layout = new QVBoxLayout(&dialog);
+    if (!message.trimmed().isEmpty()) {
+        auto* message_label = new QLabel(message, &dialog);
+        message_label->setWordWrap(true);
+        layout->addWidget(message_label);
+    }
+
+    auto* form = new QFormLayout();
+    std::vector<std::pair<std::string, QWidget*>> widgets;
+    if (fields.is_array()) {
+        for (const auto& field : fields) {
+            if (!field.is_object()) continue;
+            const std::string name = field.value("name", std::string{});
+            if (name.empty()) continue;
+            const QString label = QString::fromStdString(field.value("label", name));
+            const QString default_value = field.contains("default")
+                ? jsonToQString(field["default"])
+                : QString{};
+            QWidget* editor = nullptr;
+            const auto choices_it = field.find("choices");
+            if (choices_it != field.end() && choices_it->is_array()) {
+                auto* combo = new QComboBox(&dialog);
+                for (const auto& choice : *choices_it) {
+                    combo->addItem(jsonToQString(choice));
+                }
+                const int index = combo->findText(default_value);
+                if (index >= 0) combo->setCurrentIndex(index);
+                editor = combo;
+            } else {
+                auto* line_edit = new QLineEdit(default_value, &dialog);
+                editor = line_edit;
+            }
+            form->addRow(label, editor);
+            widgets.emplace_back(name, editor);
+        }
+    }
+    layout->addLayout(form);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    const bool ok = dialog.exec() == QDialog::Accepted;
+    if (accepted) *accepted = ok;
+    nlohmann::json result = nlohmann::json::object();
+    if (!ok) return result;
+    for (const auto& [name, widget] : widgets) {
+        if (auto* combo = qobject_cast<QComboBox*>(widget)) {
+            result[name] = combo->currentText().toStdString();
+        } else if (auto* line_edit = qobject_cast<QLineEdit*>(widget)) {
+            result[name] = line_edit->text().toStdString();
+        }
+    }
+    return result;
 }
 
 }  // namespace
@@ -295,8 +388,8 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
                 QString::fromStdString(m.payload.value("title", std::string("脚本流程"))),
                 QString::fromStdString(m.payload.value("message", std::string{})),
                 QString::fromStdString(m.payload.value("steps_json", std::string("[]"))),
-                m.payload.value("finished", false),
-                m.payload.value("success", false));
+                jsonBoolValue(m.payload, "finished", false),
+                jsonBoolValue(m.payload, "success", false));
         }
         return;
     }
@@ -400,6 +493,12 @@ void MainWindow::handleDialogRequest(const HostMessage& m) {
                                                     QString::fromStdString(m.payload.value("default", std::string{})), &ok);
         response["cancelled"] = !ok;
         response["response"] = value.toStdString();
+    } else if (kind == QStringLiteral("multi_field_input")) {
+        bool ok = false;
+        response["response"] = showMultiFieldInputDialog(this, title, message,
+                                                         m.payload.value("fields", nlohmann::json::array()),
+                                                         &ok);
+        response["cancelled"] = !ok;
     } else {
         if (kind == QStringLiteral("error")) QMessageBox::critical(this, title, message);
         else if (kind == QStringLiteral("warning")) QMessageBox::warning(this, title, message);
