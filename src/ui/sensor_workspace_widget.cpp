@@ -27,6 +27,7 @@
 #include <cmath>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace recordlab::host::ui {
@@ -99,6 +100,10 @@ QString frequencyText(double frequency) {
     return QStringLiteral("%1Hz").arg(frequency, 0, 'f', frequency >= 100.0 ? 0 : 1);
 }
 
+QString dataStatusText(bool has_data) {
+    return has_data ? QStringLiteral("✓") : QStringLiteral("✗");
+}
+
 QString summaryLineForJson(const nlohmann::json& value) {
     if (value.is_string()) {
         return QString::fromStdString(value.get<std::string>());
@@ -109,16 +114,21 @@ QString summaryLineForJson(const nlohmann::json& value) {
     return QString::fromStdString(value.dump());
 }
 
-void setListItemText(QListWidget* list, int row, const QString& name, double frequency) {
+void setListItemText(QListWidget* list, int row, const QString& name, double frequency, bool has_data) {
     if (!list || row < 0 || row >= list->count()) {
         return;
     }
-    list->item(row)->setText(QStringLiteral("%1 [%2]").arg(name, frequencyText(frequency)));
+    list->item(row)->setText(QStringLiteral("%1 %2 [%3]")
+        .arg(dataStatusText(has_data), name, frequencyText(frequency)));
 }
 
 QString dataNameFromListText(const QString& text) {
     const int frequency_pos = text.indexOf(QStringLiteral(" ["));
-    return (frequency_pos >= 0 ? text.left(frequency_pos) : text).trimmed();
+    QString name = (frequency_pos >= 0 ? text.left(frequency_pos) : text).trimmed();
+    if (name.startsWith(QStringLiteral("✓ ")) || name.startsWith(QStringLiteral("✗ "))) {
+        name = name.mid(2).trimmed();
+    }
+    return name;
 }
 
 bool jsonNumberAt(const nlohmann::json& value, std::size_t index, double& out) {
@@ -131,6 +141,42 @@ bool jsonNumberAt(const nlohmann::json& value, std::size_t index, double& out) {
     }
     out = item.get<double>();
     return std::isfinite(out);
+}
+
+std::optional<double> jsonNumberField(const nlohmann::json& value, const char* field) {
+    if (!value.is_object()) {
+        return std::nullopt;
+    }
+    const auto it = value.find(field);
+    if (it == value.end() || !it->is_number()) {
+        return std::nullopt;
+    }
+    const double number = it->get<double>();
+    if (!std::isfinite(number) || number <= 0.0) {
+        return std::nullopt;
+    }
+    return number;
+}
+
+std::optional<double> timestampSecondsForCurve(const nlohmann::json& value) {
+    if (const auto timestamp_ns = jsonNumberField(value, "timestamp_ns")) {
+        return *timestamp_ns / 1e9;
+    }
+    if (const auto timestamp_us = jsonNumberField(value, "timestamp_us")) {
+        return *timestamp_us / 1e6;
+    }
+    if (const auto timestamp = jsonNumberField(value, "timestamp")) {
+        // Some payloads use timestamp for microseconds, while others already
+        // send seconds. Keep this normalization local to display only.
+        if (*timestamp >= 1e16) {
+            return *timestamp / 1e9;
+        }
+        if (*timestamp >= 1e12) {
+            return *timestamp / 1e6;
+        }
+        return *timestamp;
+    }
+    return std::nullopt;
 }
 
 }  // namespace
@@ -315,13 +361,13 @@ protected:
             painter.setPen(QColor(QStringLiteral("#6b6b6b")));
             painter.drawText(QRect(chart_rect.left(), chart_rect.bottom() + 4, 72, 18),
                              Qt::AlignLeft | Qt::AlignVCenter,
-                             QStringLiteral("%1").arg(visible_start, 0, 'f', 1));
+                             QStringLiteral("0.0"));
             painter.drawText(QRect(chart_rect.center().x() - 44, chart_rect.bottom() + 4, 88, 18),
                              Qt::AlignHCenter | Qt::AlignVCenter,
-                             QStringLiteral("%1").arg(visible_start + visible_span / 2.0, 0, 'f', 1));
+                             QStringLiteral("%1").arg(visible_span / 2.0, 0, 'f', 1));
             painter.drawText(QRect(chart_rect.right() - 72, chart_rect.bottom() + 4, 72, 18),
                              Qt::AlignRight | Qt::AlignVCenter,
-                             QStringLiteral("%1").arg(visible_end, 0, 'f', 1));
+                             QStringLiteral("%1").arg(visible_span, 0, 'f', 1));
             painter.setPen(colors[axis].darker(105));
             painter.drawText(stats_rect, Qt::AlignCenter | Qt::TextWordWrap,
                              QStringLiteral("mean:%1\nstd:%2  pkpk:%3")
@@ -401,6 +447,7 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
     list_row_by_label_.clear();
     channel_stream_keys_.clear();
     summary_only_labels_.clear();
+    labels_with_data_.clear();
     summary_value_blocks_.clear();
     realtime_value_lines_.clear();
     smoothed_value_by_label_.clear();
@@ -416,7 +463,7 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
             summary_only_labels_.insert(label);
             summary_value_blocks_[label] = QStringLiteral("最新数据\n--\n更新时间: --");
         } else {
-            list->addItem(QStringLiteral("%1 [--Hz]").arg(label));
+            list->addItem(QStringLiteral("✗ %1 [--Hz]").arg(label));
         }
         list_row_by_label_[label] = row;
         label_key_by_label_[label] = stream_key;
@@ -444,7 +491,6 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
 }
 
 void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const nlohmann::json& value, double frequency) {
-    updateFrequencyLabels(data_name, value, frequency);
     if (value.is_object()) {
         const int type = value.value("type", 0);
         const QString stream_key = QStringLiteral("%1:%2").arg(data_name).arg(type);
@@ -457,6 +503,10 @@ void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const n
             ? fallbackChannelLabel(data_name, type)
             : configured_label->second;
         const auto smoothed = appendCurveSample(label, value);
+        if (smoothed) {
+            labels_with_data_.insert(label);
+        }
+        updateFrequencyLabels(data_name, value, frequency);
         QString value_text = QStringLiteral("type:%1 ").arg(type);
         if (value.contains("data") && value["data"].is_array() && !value["data"].empty()) {
             if (isTemperatureType(type) || isTemperatureLabel(label)) {
@@ -678,7 +728,8 @@ void SensorWorkspaceWidget::updateFrequencyLabels(const QString& data_name, cons
                     QListWidget* list = channel_stream_keys_.find(stream_key) != channel_stream_keys_.end()
                         ? data_selection_list_
                         : custom_data_list_;
-                    setListItemText(list, row_it->second, label_it->second, frequency_value.get<double>());
+                    const bool has_data = labels_with_data_.find(label_it->second) != labels_with_data_.end();
+                    setListItemText(list, row_it->second, label_it->second, frequency_value.get<double>(), has_data);
                 }
             }
         }
@@ -699,7 +750,8 @@ void SensorWorkspaceWidget::updateFrequencyLabels(const QString& data_name, cons
     QListWidget* list = channel_stream_keys_.find(stream_key) != channel_stream_keys_.end()
         ? data_selection_list_
         : custom_data_list_;
-    setListItemText(list, row_it->second, label_it->second, frequency);
+    const bool has_data = labels_with_data_.find(label_it->second) != labels_with_data_.end();
+    setListItemText(list, row_it->second, label_it->second, frequency, has_data);
 }
 
 void SensorWorkspaceWidget::updateSelectedDataFromItem(QListWidgetItem* item) {
@@ -733,9 +785,9 @@ std::optional<std::array<double, 3>> SensorWorkspaceWidget::appendCurveSample(co
             return std::nullopt;
         }
     }
-    const double timestamp = value.value("timestamp", value.value("timestamp_ns", 0.0) / 1e9);
-    const double display_timestamp = timestamp > 0.0
-        ? timestamp
+    const auto timestamp = timestampSecondsForCurve(value);
+    const double display_timestamp = timestamp
+        ? *timestamp
         : (history.empty() ? 0.0 : history.back()[0] + 0.01);
     if (!history.empty() && display_timestamp < history.back()[0] - 1.0) {
         history.clear();

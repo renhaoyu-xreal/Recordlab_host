@@ -83,6 +83,7 @@ private:
     std::map<QString, int> list_row_by_label_;
     std::set<QString> channel_stream_keys_;
     std::set<QString> summary_only_labels_;
+    std::set<QString> labels_with_data_;
 };
 
 }  // namespace recordlab::host::ui
