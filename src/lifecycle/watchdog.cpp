@@ -313,6 +313,7 @@ AgentHealthState Watchdog::doStartDevice() {
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
         "triggering start_device for agent=" + agent_name,
         {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "start_device"}});
+    publishUiLog("发送命令: start_device {}", "info", "command");
 
     bus_.publish({
         .request_id = request_id,
@@ -325,13 +326,18 @@ AgentHealthState Watchdog::doStartDevice() {
             {"cmd", "start_device"},
             {"params", nlohmann::json::object()},
             {"priority", "high"},
-            {"silent", false},
+            {"silent", true},
         },
     });
 
     auto opt = waitForResult(request_id, "start_device", 30000);
     if (!opt || !opt->payload.value("success", false)) {
         last_reason_ = opt ? "start_device_failed" : "start_device_timeout";
+        publishUiLog(
+            opt ? "start_device 失败: " + opt->payload.value("message", std::string{})
+                : "start_device 超时",
+            "error",
+            "command");
         common::Logger::instance().log(common::LogLevel::Error, "Watchdog",
             "start_device failed for agent=" + agent_name,
             {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "start_device"}});
@@ -340,6 +346,7 @@ AgentHealthState Watchdog::doStartDevice() {
 
     consecutive_failures_ = 0;
     last_reason_ = "start_device_succeeded";
+    publishUiLog("start_device: " + opt->payload.value("message", std::string{}), "success", "command");
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
         "start_device succeeded for agent=" + agent_name,
         {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "start_device"}});
@@ -411,6 +418,21 @@ std::vector<std::string> Watchdog::monitoredAgents() const {
 
 bool Watchdog::hasActiveAgent() const {
     return !monitoredAgents().empty();
+}
+
+void Watchdog::publishUiLog(const std::string& message,
+                            const std::string& level,
+                            const std::string& log_type) {
+    bus_.publish({
+        .source = msg::WATCHDOG,
+        .target = msg::UI,
+        .type = msg::LOG_ENTRY,
+        .payload = {
+            {"message", message},
+            {"level", level},
+            {"log_type", log_type},
+        },
+    });
 }
 
 void Watchdog::publishState(AgentHealthState state, const nlohmann::json& extra) {

@@ -37,6 +37,7 @@ add_library(recordlab_host
   include/recordlab_host/ui/data_page.h
   include/recordlab_host/ui/data_output_directory_widget.h
   include/recordlab_host/ui/entry_page.h
+  include/recordlab_host/ui/log_text_edit.h
   include/recordlab_host/ui/main_window.h
   include/recordlab_host/ui/script_page.h
   include/recordlab_host/ui/sensor_workspace_widget.h
@@ -68,6 +69,7 @@ add_library(recordlab_host
   src/ui/data_page.cpp
   src/ui/data_output_directory_widget.cpp
   src/ui/entry_page.cpp
+  src/ui/log_text_edit.cpp
   src/ui/main_window.cpp
   src/ui/script_page.cpp
   src/ui/sensor_workspace_widget.cpp

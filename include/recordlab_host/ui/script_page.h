@@ -6,11 +6,11 @@
 class QHBoxLayout;
 class QLabel;
 class QListWidget;
-class QPlainTextEdit;
 class QTabWidget;
 
 namespace recordlab::host::ui {
 
+class LogTextEdit;
 class SensorWorkspaceWidget;
 
 class ScriptPage : public QWidget {
@@ -21,7 +21,7 @@ public:
 
     SensorWorkspaceWidget* sensorWorkspace() const;
     QListWidget* scriptList() const;
-    QPlainTextEdit* logView() const;
+    LogTextEdit* logView() const;
     void setScripts(const QStringList& scripts);
     void setDataRoot(const QString& data_root);
     QStringList selectedScripts() const;
@@ -38,7 +38,7 @@ private:
     QWidget* buildWorkflowPanel();
     SensorWorkspaceWidget* sensor_workspace_ = nullptr;
     QListWidget* script_list_ = nullptr;
-    QPlainTextEdit* log_view_ = nullptr;
+    LogTextEdit* log_view_ = nullptr;
     QTabWidget* output_tabs_ = nullptr;
     QWidget* workflow_panel_ = nullptr;
     QLabel* workflow_title_label_ = nullptr;

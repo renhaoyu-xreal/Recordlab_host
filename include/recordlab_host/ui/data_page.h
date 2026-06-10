@@ -11,6 +11,7 @@ class QPlainTextEdit;
 
 namespace recordlab::host::ui {
 
+class LogTextEdit;
 class SensorWorkspaceWidget;
 
 class DataPage : public QWidget {
@@ -23,7 +24,7 @@ public:
     QComboBox* agentSelector() const;
     QComboBox* commandComboBox() const;
     QPlainTextEdit* commandParamsEdit() const;
-    QPlainTextEdit* logView() const;
+    LogTextEdit* logView() const;
     void setDataRoot(const QString& data_root);
     void setCommands(const std::vector<std::string>& commands);
     void setCookies(const nlohmann::json& cookies);
@@ -37,7 +38,7 @@ private:
     QComboBox* agent_selector_ = nullptr;
     QComboBox* command_combo_box_ = nullptr;
     QPlainTextEdit* command_params_edit_ = nullptr;
-    QPlainTextEdit* log_view_ = nullptr;
+    LogTextEdit* log_view_ = nullptr;
     QPlainTextEdit* cookie_view_ = nullptr;
 };
 

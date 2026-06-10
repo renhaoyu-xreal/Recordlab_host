@@ -42,6 +42,10 @@ private:
     void handleWorkflowEvent(const nlohmann::json& event);
     void sendRuntimeResponse(const nlohmann::json& response);
     void publishToUI(const std::string& type, nlohmann::json payload);
+    void publishLog(std::string message,
+                    std::string level = "info",
+                    std::string log_type = "script",
+                    nlohmann::json extra = nlohmann::json::object());
     void reportException(const char* context, const std::exception* error = nullptr);
 
     HostMessageBus& bus_;

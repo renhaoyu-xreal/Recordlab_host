@@ -353,7 +353,6 @@ Python node 到 Host 数据通信：
       "init_device_params": {
         "read_path": "data/samples/imu_0.csv"
       },
-      "init_device_pause_duration": 0.1,
       "default_scripts": [
         "imu_simulation_record_demo.py"
       ],

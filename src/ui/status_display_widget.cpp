@@ -82,14 +82,11 @@ void FlashValueDisplayWidget::updateValueText(const QString& value_text) {
     if (!value_label_) {
         return;
     }
-    const bool changed = value_text != value_label_->text();
     value_label_->setText(value_text);
     if (stale_timer_) {
         stale_timer_->start(kStaleTimeoutMs);
     }
-    if (changed) {
-        startFlash();
-    }
+    startFlash();
 }
 
 QLabel* FlashValueDisplayWidget::valueLabel() const {
@@ -123,11 +120,14 @@ void FlashValueDisplayWidget::clearIfStale() {
 }
 
 void FlashValueDisplayWidget::startFlash() {
-    if (is_flashing_) {
-        return;
+    if (flash_timer_) {
+        flash_timer_->stop();
     }
     is_flashing_ = true;
     flash_count_ = 0;
+    if (value_frame_) {
+        value_frame_->setStyleSheet(flash_style_);
+    }
     flash_timer_->start(kFlashIntervalMs);
 }
 

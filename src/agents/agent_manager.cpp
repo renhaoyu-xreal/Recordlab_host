@@ -33,6 +33,16 @@ int commandTimeoutMs(const nlohmann::json& payload) {
     return 0;
 }
 
+nlohmann::json makeLogEntry(std::string message,
+                            std::string level,
+                            std::string log_type) {
+    return {
+        {"message", std::move(message)},
+        {"level", std::move(level)},
+        {"log_type", std::move(log_type)},
+    };
+}
+
 }  // namespace
 
 AgentManager::AgentManager(HostMessageBus& bus, std::string agents_config_path,
@@ -124,7 +134,7 @@ void AgentManager::handleMessage(const HostMessage& msg) {
 void AgentManager::doActivateAgent(const std::string& agent_name) {
     try {
         const auto config = AgentConfigLoader(agents_config_path_).loadAgent(agent_name);
-        publishResult(msg::LOG_ENTRY, {{"message", "启动 Agent: " + agent_name}});
+        publishResult(msg::LOG_ENTRY, makeLogEntry("启动 Agent: " + agent_name, "info", "agent"));
         common::Logger::instance().log(
             common::LogLevel::Info,
             "AgentManager",
@@ -147,7 +157,8 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
         AgentProxy& agent = getOrCreateAgent(config);
         if (agent.launchOrConnect()) {
             active_agent_ = config.name;
-            publishResult(msg::LOG_ENTRY, {{"message", "Agent " + agent_name + " 连接成功，等待 Watchdog 初始化"}});
+            publishResult(msg::LOG_ENTRY, makeLogEntry(
+                "Agent " + agent_name + " 连接成功，等待 Watchdog 初始化", "success", "agent"));
             publishResult(msg::AGENT_ACTIVATED, {
                 {"agent_name", agent_name}, {"success", true},
                 {"message", "Agent activated"},
@@ -161,13 +172,14 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
                 {"init_device_params", config.init_device_params},
             });
         } else {
-            publishResult(msg::LOG_ENTRY, {{"message", "Agent " + agent_name + " 连接失败"}});
+            publishResult(msg::LOG_ENTRY, makeLogEntry("Agent " + agent_name + " 连接失败", "error", "agent"));
             publishResult(msg::AGENT_ACTIVATED, {
                 {"agent_name", agent_name}, {"success", false}, {"message", "Connection failed"},
             });
         }
     } catch (const std::exception& e) {
-        publishResult(msg::LOG_ENTRY, {{"message", std::string("Agent 启动失败: ") + e.what()}});
+        publishResult(msg::LOG_ENTRY, makeLogEntry(
+            std::string("Agent 启动失败: ") + e.what(), "error", "agent"));
         publishResult(msg::AGENT_ACTIVATED, {
             {"agent_name", agent_name}, {"success", false}, {"message", e.what()},
         });
@@ -219,7 +231,8 @@ void AgentManager::doCmdRequest(const std::string& agent_name, const std::string
     }
     try {
         if (!silent) {
-            publishResult(msg::LOG_ENTRY, {{"message", "发送命令: " + cmd + " " + params.dump()}});
+            publishResult(msg::LOG_ENTRY, makeLogEntry(
+                "发送命令: " + cmd + " " + params.dump(), "info", "command"));
         }
         common::Logger::instance().log(common::LogLevel::Info, "AgentManager", "sending command", {
             {"request_id", last_request_id_},
@@ -248,7 +261,10 @@ void AgentManager::doCmdRequest(const std::string& agent_name, const std::string
             {"result", result.result},
         });
         if (!silent) {
-            publishResult(msg::LOG_ENTRY, {{"message", cmd + ": " + message}});
+            publishResult(msg::LOG_ENTRY, makeLogEntry(
+                cmd + ": " + message,
+                result.success ? "success" : "error",
+                "command"));
         }
     } catch (const std::exception& e) {
         common::Logger::instance().log(common::LogLevel::Error, "AgentManager", "command exception", {
@@ -265,7 +281,8 @@ void AgentManager::doCmdRequest(const std::string& agent_name, const std::string
             {"result", nlohmann::json::object()},
         });
         if (!silent) {
-            publishResult(msg::LOG_ENTRY, {{"message", cmd + " 失败: " + std::string(e.what())}});
+            publishResult(msg::LOG_ENTRY, makeLogEntry(
+                cmd + " 失败: " + std::string(e.what()), "error", "command"));
         }
     }
 }
@@ -314,7 +331,7 @@ void AgentManager::doLocalScriptCommand(const AgentConfig& config, const std::st
 
     try {
         if (!silent) {
-            publishResult(msg::LOG_ENTRY, {{"message", "执行本地脚本命令: " + cmd}});
+            publishResult(msg::LOG_ENTRY, makeLogEntry("执行本地脚本命令: " + cmd, "info", "command"));
         }
         ProcessHandle process;
         process.start(args, nodes_root_, nodes_root_ + ":" + echo_python_root_);

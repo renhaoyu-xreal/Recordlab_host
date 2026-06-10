@@ -75,6 +75,16 @@ int jsonTimeoutMs(const nlohmann::json& object) {
     return 0;
 }
 
+nlohmann::json makeLogPayload(std::string message,
+                              std::string level,
+                              std::string log_type,
+                              nlohmann::json extra = nlohmann::json::object()) {
+    extra["message"] = std::move(message);
+    extra["level"] = std::move(level);
+    extra["log_type"] = std::move(log_type);
+    return extra;
+}
+
 }  // namespace
 
 ScriptsActuator::ScriptsActuator(HostMessageBus& bus, QString nodes_root,
@@ -127,12 +137,12 @@ void ScriptsActuator::pollBus() {
 
 void ScriptsActuator::doRunScript(const std::string& script_path, const std::string& agent_name) {
     if (script_process_ && script_process_->state() != QProcess::NotRunning) {
-        publishToUI(msg::LOG_ENTRY, {{"message", "已有脚本正在运行"}});
+        publishLog("已有脚本正在运行", "warning", "script");
         return;
     }
     const QString resolved = resolveScriptPath(QString::fromStdString(script_path));
     if (resolved.isEmpty()) {
-        publishToUI(msg::LOG_ENTRY, {{"message", "没有选择脚本"}});
+        publishLog("没有选择脚本", "warning", "script");
         return;
     }
     current_agent_ = QString::fromStdString(agent_name);
@@ -221,13 +231,16 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
                 {"exit_code", exit_code},
                 {"stop_requested", stop_requested_},
             });
-            publishToUI(msg::LOG_ENTRY, {
-                {"message", stop_requested_ ? "脚本已停止并完成收尾" : "脚本退出: " + std::to_string(exit_code)},
-                {"process", "script"},
-                {"script_path", current_script_path_},
-                {"pid", pid},
-                {"script_id", current_script_id_},
-            });
+            publishLog(
+                stop_requested_ ? "脚本已停止并完成收尾" : "脚本退出: " + std::to_string(exit_code),
+                stop_requested_ || exit_code == 0 ? "success" : "error",
+                "script",
+                {
+                    {"process", "script"},
+                    {"script_path", current_script_path_},
+                    {"pid", pid},
+                    {"script_id", current_script_id_},
+                });
             common::Logger::instance().log(common::LogLevel::Info, "ScriptsActuator", "script finished", {
                 {"script_id", current_script_id_},
                 {"script_path", current_script_path_},
@@ -242,7 +255,7 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
         }
     });
 
-    publishToUI(msg::LOG_ENTRY, {{"message", "运行脚本: " + resolved.toStdString()}});
+    publishLog("运行脚本: " + resolved.toStdString(), "info", "script");
     const QString python_bin = env.value(QStringLiteral("RECORDLAB_PYTHON_BIN"), python_bin_);
     const QString runtime = QDir(nodes_root_).filePath(QStringLiteral("scripts/runtime/run_recordlab_script.py"));
     if (QFileInfo(runtime).exists()) {
@@ -270,7 +283,7 @@ void ScriptsActuator::doStopScript() {
                 reportException("kill script process");
             }
         });
-        publishToUI(msg::LOG_ENTRY, {{"message", "脚本已停止"}});
+        publishLog("脚本已停止", "warning", "script");
     }
 }
 
@@ -336,9 +349,9 @@ bool ScriptsActuator::handleRuntimeEvent(const QString& line) {
         if (type == "workflow") handleWorkflowEvent(event);
         if (type == "required_agents") publishToUI(msg::SCRIPT_REQUIRED_AGENTS, event);
     } catch (const std::exception& e) {
-        publishToUI(msg::LOG_ENTRY, {{"message", std::string("runtime 事件解析失败: ") + e.what()}});
+        publishLog(std::string("runtime 事件解析失败: ") + e.what(), "error", "script");
     } catch (...) {
-        publishToUI(msg::LOG_ENTRY, {{"message", "runtime 事件解析失败: unknown exception"}});
+        publishLog("runtime 事件解析失败: unknown exception", "error", "script");
     }
     return true;
 }
@@ -424,11 +437,19 @@ void ScriptsActuator::publishToUI(const std::string& type, nlohmann::json payloa
     bus_.publish({.source = msg::SCRIPTS_ACTUATOR, .target = msg::UI, .type = type, .payload = std::move(payload)});
 }
 
+void ScriptsActuator::publishLog(std::string message,
+                                 std::string level,
+                                 std::string log_type,
+                                 nlohmann::json extra) {
+    publishToUI(msg::LOG_ENTRY, makeLogPayload(
+        std::move(message), std::move(level), std::move(log_type), std::move(extra)));
+}
+
 void ScriptsActuator::reportException(const char* context, const std::exception* error) {
     const std::string detail = error ? error->what() : "unknown exception";
     const std::string message = std::string("脚本运行器内部异常(") + context + "): " + detail;
     try {
-        publishToUI(msg::LOG_ENTRY, {{"message", message}});
+        publishLog(message, "error", "script");
     } catch (...) {
     }
     try {

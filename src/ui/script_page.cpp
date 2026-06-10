@@ -1,6 +1,7 @@
 #include "recordlab_host/ui/script_page.h"
 
 #include "recordlab_host/ui/data_output_directory_widget.h"
+#include "recordlab_host/ui/log_text_edit.h"
 #include "recordlab_host/ui/sensor_workspace_widget.h"
 
 #include <QGroupBox>
@@ -10,7 +11,6 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QListWidget>
-#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSplitter>
@@ -147,12 +147,10 @@ ScriptPage::ScriptPage(QWidget* parent) : QWidget(parent) {
 
     auto* log_group = new QGroupBox(QStringLiteral("执行日志"), bottom_splitter);
     auto* log_layout = new QVBoxLayout(log_group);
-    log_view_ = new QPlainTextEdit(log_group);
+    log_view_ = new LogTextEdit(log_group);
     log_view_->setObjectName(QStringLiteral("script_log_view"));
-    log_view_->setReadOnly(true);
-    log_view_->setMaximumBlockCount(2000);
     log_view_->setPlaceholderText(QStringLiteral("脚本启动、停止、运行日志会持续输出到这里。"));
-    log_view_->setStyleSheet(QStringLiteral("QPlainTextEdit { background-color: #ffffe0; border: 1px solid #888; padding: 5px; }"));
+    log_view_->setStyleSheet(QStringLiteral("QTextEdit { background-color: #ffffe0; border: 1px solid #888; padding: 5px; }"));
     log_layout->addWidget(log_view_);
     bottom_splitter->addWidget(log_group);
 
@@ -165,7 +163,10 @@ ScriptPage::ScriptPage(QWidget* parent) : QWidget(parent) {
     auto* data_output = new DataOutputDirectoryWidget(QStringLiteral("data"), output_tabs_);
     data_output->setObjectName(QStringLiteral("script_data_output_widget"));
     connect(data_output, &DataOutputDirectoryWidget::messageReady, this, [this](const QString& message) {
-            if (log_view_) log_view_->appendPlainText(message);
+            if (log_view_) log_view_->appendLogEntry(
+                message,
+                LogTextEdit::inferLevel(message),
+                QStringLiteral("data"));
     });
     const int data_tab_index = output_tabs_->addTab(data_output, data_output->titleText());
     connect(data_output, &DataOutputDirectoryWidget::titleChanged, this,
@@ -188,7 +189,7 @@ QListWidget* ScriptPage::scriptList() const {
     return script_list_;
 }
 
-QPlainTextEdit* ScriptPage::logView() const {
+LogTextEdit* ScriptPage::logView() const {
     return log_view_;
 }
 

@@ -62,6 +62,9 @@ private:
     void sendEstopToMonitoredAgents();
     void sendStopRecordToMonitoredAgents();
     void stopScriptAndStopRecords(const std::string& reason);
+    void publishUiLog(const std::string& message,
+                      const std::string& level = "info",
+                      const std::string& log_type = "watchdog");
     std::string activeAgent() const;
     std::vector<std::string> monitoredAgents() const;
     bool hasActiveAgent() const;

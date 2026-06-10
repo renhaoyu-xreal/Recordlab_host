@@ -37,7 +37,6 @@ struct AgentConfig {
     int data_port = 0;
     std::string root_path;
     nlohmann::json init_device_params = nlohmann::json::object();
-    double init_device_pause_duration = 0.0;
     std::vector<TopicConfig> topics;
     std::vector<std::string> default_scripts;
     std::vector<std::string> exposed_commands;

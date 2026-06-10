@@ -104,7 +104,6 @@ ScriptsActuator 或 DataRegistryServer 边界。
 | `data_port`                  | 是       | Python 节点/DataReceiver | Echo topic 数据端口；同一 agent 的所有静态 topic 共用此端口。 |
 | `root_path`                  | 可选     | Python 节点             | 默认为 `data`。                                              |
 | `init_device_params`         | 可选     | Python 节点命令         | 默认为 `{}`。                                                |
-| `init_device_pause_duration` | 可选     | Python 节点/工作流      | 默认为 `0.0`。                                               |
 | `topics`                     | 可选     | DataReceiver            | 静态 topic 列表；元素只包含 `name/encoding`，不包含 `port`；可引用 `shared.topic_sets`。 |
 | `default_scripts`            | 可选     | UI/ScriptsActuator      | 为所选 agent 列出的脚本。                                    |
 | `exposed_commands`           | 可选     | UI                      | 数据页命令下拉列表；可引用 `shared.exposed_commands`。        |

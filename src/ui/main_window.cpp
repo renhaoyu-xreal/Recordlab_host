@@ -45,6 +45,51 @@ bool isCheckLogMessage(const QString& message) {
         || trimmed.startsWith(QStringLiteral("check 失败:"));
 }
 
+QString normalizedLogLevel(QString level) {
+    level = level.trimmed();
+    if (level.startsWith('[') && level.endsWith(']') && level.size() >= 2) {
+        level = level.mid(1, level.size() - 2).trimmed();
+    }
+    level = level.toLower();
+    if (level == QStringLiteral("success")
+        || level == QStringLiteral("ok")
+        || level == QStringLiteral("passed")
+        || level == QStringLiteral("completed")) {
+        return QStringLiteral("success");
+    }
+    if (level == QStringLiteral("warning")
+        || level == QStringLiteral("warn")) {
+        return QStringLiteral("warning");
+    }
+    if (level == QStringLiteral("error")
+        || level == QStringLiteral("failed")
+        || level == QStringLiteral("failure")) {
+        return QStringLiteral("error");
+    }
+    if (level == QStringLiteral("success")
+        || level == QStringLiteral("warning")
+        || level == QStringLiteral("error")) {
+        return level;
+    }
+    return QStringLiteral("info");
+}
+
+QString normalizedLogType(QString log_type) {
+    log_type = log_type.trimmed();
+    if (log_type.startsWith('[') && log_type.endsWith(']') && log_type.size() >= 2) {
+        log_type = log_type.mid(1, log_type.size() - 2).trimmed();
+    }
+    log_type = log_type.toLower();
+    return log_type.isEmpty() ? QStringLiteral("system") : log_type;
+}
+
+common::LogLevel toCommonLogLevel(const QString& level) {
+    if (level == QStringLiteral("error")) return common::LogLevel::Error;
+    if (level == QStringLiteral("warning")) return common::LogLevel::Warn;
+    if (level == QStringLiteral("success")) return common::LogLevel::Info;
+    return common::LogLevel::Info;
+}
+
 bool workflowStepHasStatus(const nlohmann::json& payload,
                            const std::string& step_key,
                            const std::string& status) {
@@ -343,11 +388,9 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
             value["_stream_frequencies_hz"] = m.payload["stream_frequencies_hz"];
         }
         const double freq = m.payload.value("frequency_hz", 0.0);
-        const bool first = m.payload.value("first_message", false);
         const QString name = QString::fromStdString(topic);
-        if (first) appendLog(QStringLiteral("收到 topic: %1").arg(name));
         if (workspace_page_) {
-            if (first) {
+            if (m.payload.value("first_message", false)) {
                 workspace_page_->scriptPage()->sensorWorkspace()->resetTopicData(name);
                 workspace_page_->dataPage()->sensorWorkspace()->resetTopicData(name);
             }
@@ -499,7 +542,10 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
     if (m.type == msg::LOG_ENTRY) {
         const QString message = QString::fromStdString(m.payload.value("message", ""));
         if (!isCheckLogMessage(message)) {
-            appendLog(message);
+            appendLog(
+                message,
+                QString::fromStdString(m.payload.value("level", std::string("info"))),
+                QString::fromStdString(m.payload.value("log_type", std::string("system"))));
         }
         return;
     }
@@ -510,13 +556,22 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
 
 // ── Logging ────────────────────────────────────────────────────
 
-void MainWindow::appendLog(const QString& message) {
+void MainWindow::appendLog(const QString& message, const QString& level, const QString& log_type) {
     if (message.trimmed().isEmpty()) return;
-    const QString line = QStringLiteral("[%1] %2")
-        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")), message);
+    const QString normalized_level = normalizedLogLevel(level);
+    const QString normalized_type = normalizedLogType(log_type);
+    const QString line = QStringLiteral("[%1] [%2] [%3] %4")
+        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")),
+             normalized_level.toUpper(),
+             normalized_type.toUpper(),
+             message);
     common::Logger::instance().appendUiLine(line.toStdString());
-    common::Logger::instance().log(common::LogLevel::Info, "UI", message.toStdString());
-    emit logMessage(line);
+    common::Logger::instance().log(
+        toCommonLogLevel(normalized_level),
+        "UI",
+        message.toStdString(),
+        {{"level", normalized_level.toStdString()}, {"log_type", normalized_type.toStdString()}});
+    emit logMessage(message, normalized_level, normalized_type);
 }
 
 void MainWindow::applyUiBindings(const std::string& topic, const nlohmann::json& value) {
@@ -816,7 +871,7 @@ void MainWindow::reportQtException(const QString& context, const std::exception*
     const QString detail = error ? QString::fromUtf8(error->what()) : QStringLiteral("unknown exception");
     const QString message = QStringLiteral("Qt 回调内部异常(%1): %2").arg(context, detail);
     try {
-        appendLog(message);
+        appendLog(message, QStringLiteral("error"), QStringLiteral("ui"));
     } catch (...) {
     }
     try {

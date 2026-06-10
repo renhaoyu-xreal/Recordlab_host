@@ -2,6 +2,7 @@
 
 #include "recordlab_host/common/logger.h"
 #include "recordlab_host/ui/data_page.h"
+#include "recordlab_host/ui/log_text_edit.h"
 #include "recordlab_host/ui/main_window.h"
 #include "recordlab_host/ui/sensor_workspace_widget.h"
 #include "recordlab_host/ui/script_page.h"
@@ -11,7 +12,6 @@
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QTabWidget>
 #include <QVBoxLayout>
@@ -122,11 +122,12 @@ void WorkspacePage::bindMainWindow(MainWindow* mainWindow) {
     connect(script_page_, &ScriptPage::stopScriptRequested, main_window_, &MainWindow::stopScript);
 
     // MainWindow signals → UI
-    connect(main_window_, &MainWindow::logMessage, this, [this](const QString& message) {
+    connect(main_window_, &MainWindow::logMessage, this,
+            [this](const QString& message, const QString& level, const QString& log_type) {
         try {
             if (!message.trimmed().isEmpty()) {
-                script_page_->logView()->appendPlainText(message);
-                data_page_->logView()->appendPlainText(message);
+                script_page_->logView()->appendLogEntry(message, level, log_type);
+                data_page_->logView()->appendLogEntry(message, level, log_type);
             }
         } catch (...) {
         }

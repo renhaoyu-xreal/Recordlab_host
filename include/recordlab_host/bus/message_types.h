@@ -27,7 +27,7 @@ constexpr const char* ESTOP           = "estop";              // payload: {agent
 // ── AgentManager → UI ──────────────────────────────────────────
 constexpr const char* AGENT_ACTIVATED = "agent_activated";   // payload: {agent_name, success, message}
 constexpr const char* WATCHDOG_STATE  = "watchdog_state";    // payload: {agent_name, state, reason, consecutive_failures}
-constexpr const char* LOG_ENTRY       = "log_entry";         // payload: {message}
+constexpr const char* LOG_ENTRY       = "log_entry";         // payload: {message, level, log_type}
 constexpr const char* USER_NOTIFICATION = "user_notification"; // payload: {title, message, severity}
 constexpr const char* UI_DIALOG_REQUEST = "ui.dialog.request";  // payload: {dialog_id,kind,title,message,...}
 constexpr const char* UI_DIALOG_RESPONSE = "ui.dialog.response"; // payload: {dialog_id,success,cancelled,response}

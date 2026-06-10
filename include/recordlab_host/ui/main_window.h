@@ -49,7 +49,7 @@ public:
     void pollBusMessages();
 
 signals:
-    void logMessage(const QString& message);
+    void logMessage(const QString& message, const QString& level, const QString& log_type);
     void watchdogStateChanged(const QString& state);
     void commandFinished(const QString& cmd, bool success, const QString& message);
     void recordTimerChanged(double seconds);
@@ -69,7 +69,9 @@ private:
     void applyUiBindings(const std::string& topic, const nlohmann::json& value);
     QPair<QString, QString> renderNotification(const nlohmann::json& payload) const;
     void handleDialogRequest(const HostMessage& msg);
-    void appendLog(const QString& message);
+    void appendLog(const QString& message,
+                   const QString& level = QStringLiteral("info"),
+                   const QString& log_type = QStringLiteral("system"));
     void reportQtException(const QString& context, const std::exception* error = nullptr);
     void updateSummaryPollingForActiveAgent();
     void pollAgentSummary();

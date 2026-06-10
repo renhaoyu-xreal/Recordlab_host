@@ -70,23 +70,30 @@ int main() {
         auto start = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
         assert(start.payload.value("agent_name", "") == "agent");
         assert(start.payload.value("cmd", "") == "start_device");
-        assert(start.payload.value("silent", true) == false);
+        assert(start.payload.value("silent", false) == true);
         publishResult(bus, "start_device", true);
 
         bool saw_initializing = false;
         bool saw_healthy = false;
+        bool saw_start_log = false;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (std::chrono::steady_clock::now() < deadline && !saw_healthy) {
+        while (std::chrono::steady_clock::now() < deadline && !(saw_healthy && saw_start_log)) {
             auto opt = bus.waitFor(msg::UI, 100);
-            if (!opt || opt->type != msg::WATCHDOG_STATE) {
+            if (!opt) {
                 continue;
             }
-            const auto state = opt->payload.value("state", "");
-            saw_initializing = saw_initializing || state == "INITIALIZING";
-            saw_healthy = saw_healthy || state == "HEALTHY";
+            if (opt->type == msg::WATCHDOG_STATE) {
+                const auto state = opt->payload.value("state", "");
+                saw_initializing = saw_initializing || state == "INITIALIZING";
+                saw_healthy = saw_healthy || state == "HEALTHY";
+            } else if (opt->type == msg::LOG_ENTRY) {
+                const auto message = opt->payload.value("message", std::string{});
+                saw_start_log = saw_start_log || message.find("start_device") != std::string::npos;
+            }
         }
         assert(saw_initializing);
         assert(saw_healthy);
+        assert(saw_start_log);
         watchdog.stop();
     }
 
