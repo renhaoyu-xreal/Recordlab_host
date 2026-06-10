@@ -422,7 +422,9 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
             const auto agent_name = m.payload.value("agent_name", std::string{});
             active_agent_ = QString::fromStdString(agent_name);
             active_agent_connected_ = true;
-            if (watchdog_) watchdog_->setActiveAgent(agent_name);
+            if (watchdog_) {
+                watchdog_->setActiveAgent(agent_name, m.payload.value("watchdog_start_device", true));
+            }
             if (data_receiver_) {
                 const auto config = agent_manager_->loadAgentConfig(agent_name);
                 for (const auto& t : config.topics) {
@@ -457,7 +459,15 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         });
         if (watchdog_) {
             if (!active_agent_.trimmed().isEmpty()) {
-                watchdog_->setActiveAgent(active_agent_.toStdString());
+                const std::string active_agent = active_agent_.toStdString();
+                bool watchdog_start_device = true;
+                if (agent_manager_) {
+                    try {
+                        watchdog_start_device = agent_manager_->loadAgentConfig(active_agent).watchdog_start_device;
+                    } catch (...) {
+                    }
+                }
+                watchdog_->setActiveAgent(active_agent, watchdog_start_device);
             } else {
                 watchdog_->clearActiveAgent();
             }
@@ -624,7 +634,16 @@ void MainWindow::activateAgent(const QString& agent_name) {
         summary_data_name_.clear();
         active_agent_ = agent_name;
         active_agent_connected_ = false;
-        if (watchdog_) watchdog_->setActiveAgent(agent_name.toStdString());
+        if (watchdog_) {
+            bool watchdog_start_device = true;
+            if (agent_manager_) {
+                try {
+                    watchdog_start_device = agent_manager_->loadAgentConfig(agent_name.toStdString()).watchdog_start_device;
+                } catch (...) {
+                }
+            }
+            watchdog_->setActiveAgent(agent_name.toStdString(), watchdog_start_device);
+        }
         bus_.publish({
             .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::ACTIVATE_AGENT,
             .payload = {{"agent_name", agent_name.toStdString()}},
