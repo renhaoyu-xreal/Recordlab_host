@@ -15,6 +15,7 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFormLayout>
+#include <QFont>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -158,7 +159,23 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
                 auto* line_edit = new QLineEdit(default_value, &dialog);
                 editor = line_edit;
             }
-            form->addRow(label, editor);
+            const int font_size_pt = field.value("font_size_pt", 0);
+            if (font_size_pt > 0) {
+                QFont editor_font = editor->font();
+                editor_font.setPointSize(font_size_pt);
+                editor->setFont(editor_font);
+                editor->setMinimumHeight(font_size_pt * 2);
+            }
+            const int min_width = field.value("min_width", 0);
+            if (min_width > 0) editor->setMinimumWidth(min_width);
+
+            auto* label_widget = new QLabel(label, &dialog);
+            if (font_size_pt > 0) {
+                QFont label_font = label_widget->font();
+                label_font.setPointSize(font_size_pt);
+                label_widget->setFont(label_font);
+            }
+            form->addRow(label_widget, editor);
             widgets.emplace_back(name, editor);
         }
     }
