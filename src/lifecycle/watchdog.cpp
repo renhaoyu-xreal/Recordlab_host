@@ -325,7 +325,7 @@ AgentHealthState Watchdog::doStartDevice() {
             {"cmd", "start_device"},
             {"params", nlohmann::json::object()},
             {"priority", "high"},
-            {"silent", true},
+            {"silent", false},
         },
     });
 

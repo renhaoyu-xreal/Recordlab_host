@@ -89,6 +89,19 @@ int main(int argc, char** argv) {
 
     auto* workspace = window.workspacePage();
     require(workspace != nullptr, "workspace page missing");
+    auto* timer_value_label = workspace->findChild<QLabel*>("record_timer_value_label");
+    auto* delay_value_label = workspace->findChild<QLabel*>("time_delay_value_label");
+    require(timer_value_label != nullptr, "record timer value label missing");
+    require(delay_value_label != nullptr, "time delay value label missing");
+    require(timer_value_label->text() == QStringLiteral("00:00.000"), "record timer should match legacy default format");
+    require(delay_value_label->text() == QStringLiteral("0.000 ms"), "time delay should match legacy default format");
+
+    window.recordTimerChanged(61.234);
+    window.timeDelayChanged(12.5);
+    QApplication::processEvents();
+    require(timer_value_label->text() == QStringLiteral("01:01.234"), "record timer should match legacy MM:SS.mmm format");
+    require(delay_value_label->text() == QStringLiteral("12.500 ms"), "time delay should match legacy millisecond format");
+
     auto* tabs = workspace->tabWidget();
     require(tabs != nullptr, "workspace tabs missing");
     require(tabs->count() == 2, "workspace should expose exactly two tabs");

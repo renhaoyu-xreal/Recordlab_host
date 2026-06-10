@@ -14,7 +14,9 @@ namespace recordlab::host::ui {
 
 class DataPage;
 class MainWindow;
+class RecordTimerDisplayWidget;
 class ScriptPage;
+class TimeDelayDisplayWidget;
 
 class WorkspacePage : public QWidget {
     Q_OBJECT
@@ -38,8 +40,8 @@ private:
     void updateHeader();
 
     QString active_agent_;
-    QLabel* timer_value_label_ = nullptr;
-    QLabel* delay_value_label_ = nullptr;
+    RecordTimerDisplayWidget* timer_display_ = nullptr;
+    TimeDelayDisplayWidget* delay_display_ = nullptr;
     QLabel* watchdog_value_label_ = nullptr;
     QTabWidget* tabs_ = nullptr;
     ScriptPage* script_page_ = nullptr;

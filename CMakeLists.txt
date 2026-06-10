@@ -40,6 +40,7 @@ add_library(recordlab_host
   include/recordlab_host/ui/main_window.h
   include/recordlab_host/ui/script_page.h
   include/recordlab_host/ui/sensor_workspace_widget.h
+  include/recordlab_host/ui/status_display_widget.h
   include/recordlab_host/ui/workspace_page.h
   ${ECHO_CPP_DIR}/src/action.cpp
   ${ECHO_CPP_DIR}/src/context.cpp
@@ -70,6 +71,7 @@ add_library(recordlab_host
   src/ui/main_window.cpp
   src/ui/script_page.cpp
   src/ui/sensor_workspace_widget.cpp
+  src/ui/status_display_widget.cpp
   src/ui/workspace_page.cpp
 )
 

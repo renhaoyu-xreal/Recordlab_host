@@ -5,6 +5,7 @@
 #include "recordlab_host/ui/main_window.h"
 #include "recordlab_host/ui/sensor_workspace_widget.h"
 #include "recordlab_host/ui/script_page.h"
+#include "recordlab_host/ui/status_display_widget.h"
 
 #include <QFrame>
 #include <QComboBox>
@@ -48,11 +49,26 @@ WorkspacePage::WorkspacePage(QWidget* parent) : QWidget(parent) {
     toolbar_layout->addWidget(back_button, 0);
 
     toolbar_layout->addStretch(1);
-    timer_value_label_ = new QLabel(QStringLiteral("录制时长: --"), toolbar_frame);
-    delay_value_label_ = new QLabel(QStringLiteral("时间延迟: --"), toolbar_frame);
+    timer_display_ = new RecordTimerDisplayWidget(QStringLiteral("录制时长"), toolbar_frame);
+    timer_display_->setObjectName(QStringLiteral("record_timer_display"));
+    if (auto* timer_value_label = timer_display_->valueLabel()) {
+        timer_value_label->setObjectName(QStringLiteral("record_timer_value_label"));
+    }
+    if (auto* timer_frame = timer_display_->valueFrame()) {
+        timer_frame->setObjectName(QStringLiteral("record_timer_value_frame"));
+    }
+
+    delay_display_ = new TimeDelayDisplayWidget(QStringLiteral("时间延迟"), toolbar_frame);
+    delay_display_->setObjectName(QStringLiteral("time_delay_display"));
+    if (auto* delay_value_label = delay_display_->valueLabel()) {
+        delay_value_label->setObjectName(QStringLiteral("time_delay_value_label"));
+    }
+    if (auto* delay_frame = delay_display_->valueFrame()) {
+        delay_frame->setObjectName(QStringLiteral("time_delay_value_frame"));
+    }
     watchdog_value_label_ = new QLabel(QStringLiteral("Watchdog: 无监控"), toolbar_frame);
-    toolbar_layout->addWidget(timer_value_label_);
-    toolbar_layout->addWidget(delay_value_label_);
+    toolbar_layout->addWidget(timer_display_);
+    toolbar_layout->addWidget(delay_display_);
     toolbar_layout->addStretch(1);
     toolbar_layout->addWidget(watchdog_value_label_);
     root_layout->addWidget(toolbar_frame);
@@ -125,13 +141,17 @@ void WorkspacePage::bindMainWindow(MainWindow* mainWindow) {
     });
     connect(main_window_, &MainWindow::recordTimerChanged, this, [this](double seconds) {
         try {
-            timer_value_label_->setText(QStringLiteral("录制时长: %1 s").arg(seconds, 0, 'f', 1));
+            if (timer_display_) {
+                timer_display_->updateTime(seconds);
+            }
         } catch (...) {
         }
     });
     connect(main_window_, &MainWindow::timeDelayChanged, this, [this](double milliseconds) {
         try {
-            delay_value_label_->setText(QStringLiteral("时间延迟: %1 ms").arg(milliseconds, 0, 'f', 1));
+            if (delay_display_) {
+                delay_display_->updateDelay(milliseconds);
+            }
         } catch (...) {
         }
     });

@@ -67,6 +67,12 @@ int main() {
         assert(first.payload.value("agent_name", "") == "agent");
         publishResult(bus, "init_device", true);
 
+        auto start = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
+        assert(start.payload.value("agent_name", "") == "agent");
+        assert(start.payload.value("cmd", "") == "start_device");
+        assert(start.payload.value("silent", true) == false);
+        publishResult(bus, "start_device", true);
+
         bool saw_initializing = false;
         bool saw_healthy = false;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
