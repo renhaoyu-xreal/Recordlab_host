@@ -49,7 +49,9 @@ WorkflowStatusMeta workflowStatusMeta(const QString& status) {
     return {QStringLiteral("等待"), QStringLiteral("#F5F5F5"), QStringLiteral("#555555"), QStringLiteral("#BDBDBD")};
 }
 
-QString workflowStatusText(bool finished, bool success) {
+QString workflowStatusText(bool finished, bool success, bool stopped, bool stopping) {
+    if (stopping) return QStringLiteral("停止中");
+    if (stopped) return QStringLiteral("已停止");
     if (!finished) return QStringLiteral("运行中");
     return success ? QStringLiteral("已完成") : QStringLiteral("已失败");
 }
@@ -275,11 +277,6 @@ void ScriptPage::showWorkflowTab() {
 void ScriptPage::updateWorkflow(const QString& title, const QString& message,
                                 const QString& steps_json, bool finished, bool success) {
     showWorkflowTab();
-    if (workflow_title_label_) {
-        workflow_title_label_->setText(QStringLiteral("%1 [%2]").arg(
-            title.isEmpty() ? QStringLiteral("脚本流程") : title,
-            workflowStatusText(finished, success)));
-    }
     if (!workflow_steps_layout_) return;
     while (workflow_steps_layout_->count() > 0) {
         auto* item = workflow_steps_layout_->takeAt(0);
@@ -289,6 +286,8 @@ void ScriptPage::updateWorkflow(const QString& title, const QString& message,
 
     QString focus_label;
     QString focus_message = message;
+    bool has_stopped = false;
+    bool has_stopping = false;
     try {
         const auto steps = nlohmann::json::parse(steps_json.toStdString());
         if (steps.is_array()) {
@@ -316,6 +315,8 @@ void ScriptPage::updateWorkflow(const QString& title, const QString& message,
                 const auto& step = steps.at(static_cast<size_t>(index));
                 const auto label = QString::fromStdString(step.value("label", std::string("步骤")));
                 const auto status = QString::fromStdString(step.value("status", std::string("pending")));
+                has_stopped = has_stopped || status == QStringLiteral("stopped");
+                has_stopping = has_stopping || status == QStringLiteral("stopping");
                 const auto meta = workflowStatusMeta(status);
                 auto* step_label = new QLabel(QStringLiteral("%1\n[%2]").arg(label, meta.text), workflow_panel_);
                 step_label->setAlignment(Qt::AlignCenter);
@@ -345,6 +346,11 @@ void ScriptPage::updateWorkflow(const QString& title, const QString& message,
         focus_message = QStringLiteral("流程事件解析失败");
     }
     workflow_steps_layout_->addStretch();
+    if (workflow_title_label_) {
+        workflow_title_label_->setText(QStringLiteral("%1 [%2]").arg(
+            title.isEmpty() ? QStringLiteral("脚本流程") : title,
+            workflowStatusText(finished, success, has_stopped, has_stopping)));
+    }
     if (workflow_message_label_) {
         workflow_message_label_->setText(
             focus_label.isEmpty()

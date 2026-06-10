@@ -219,9 +219,10 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
                 {"script_path", current_script_path_},
                 {"pid", pid},
                 {"exit_code", exit_code},
+                {"stop_requested", stop_requested_},
             });
             publishToUI(msg::LOG_ENTRY, {
-                {"message", "脚本退出: " + std::to_string(exit_code)},
+                {"message", stop_requested_ ? "脚本已停止并完成收尾" : "脚本退出: " + std::to_string(exit_code)},
                 {"process", "script"},
                 {"script_path", current_script_path_},
                 {"pid", pid},
@@ -232,6 +233,7 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
                 {"script_path", current_script_path_},
                 {"pid", pid},
                 {"exit_code", exit_code},
+                {"stop_requested", stop_requested_},
             });
         } catch (const std::exception& e) {
             reportException("process finished", &e);
