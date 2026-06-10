@@ -56,6 +56,7 @@ private:
     void workerLoop();
     AgentHealthState doCheck();
     AgentHealthState doInitDevice();
+    AgentHealthState doStartDevice();
     bool doRecoveryClose();
     bool checkAgent(const std::string& agent_name, int timeout_ms, std::string* failure_reason);
     void sendEstopToMonitoredAgents();
@@ -83,6 +84,7 @@ private:
     std::atomic<int> init_failures_{0};
     std::atomic<bool> failure_stop_sent_{false};
     std::atomic<bool> script_monitoring_{false};
+    std::atomic<bool> start_pending_{false};
     std::string last_reason_ = "startup";
 };
 

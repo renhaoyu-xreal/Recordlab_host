@@ -35,6 +35,7 @@ void Watchdog::start() {
     estop_requested_ = false;
     consecutive_failures_ = 0;
     init_failures_ = 0;
+    start_pending_ = false;
     last_reason_ = "startup";
     state_ = AgentHealthState::DISCONNECTED;
     worker_ = std::thread(&Watchdog::workerLoop, this);
@@ -61,6 +62,7 @@ void Watchdog::setActiveAgent(std::string agent_name) {
     init_failures_ = 0;
     failure_stop_sent_ = false;
     script_monitoring_ = false;
+    start_pending_ = false;
     last_reason_ = "agent_activated";
     state_ = AgentHealthState::DISCONNECTED;
 }
@@ -96,6 +98,7 @@ void Watchdog::clearActiveAgent() {
     init_failures_ = 0;
     failure_stop_sent_ = false;
     script_monitoring_ = false;
+    start_pending_ = false;
     last_reason_ = "agent_cleared";
     state_ = AgentHealthState::DISCONNECTED;
 }
@@ -121,6 +124,7 @@ void Watchdog::workerLoop() {
             state_ = AgentHealthState::DISCONNECTED;
             consecutive_failures_ = 0;
             init_failures_ = 0;
+            start_pending_ = false;
             last_reason_ = "estop";
             publishState(AgentHealthState::DISCONNECTED);
             sendEstopToMonitoredAgents();
@@ -139,7 +143,11 @@ void Watchdog::workerLoop() {
             next = doInitDevice();
             break;
         case AgentHealthState::HEALTHY:
-            next = doCheck();
+            if (start_pending_.exchange(false)) {
+                next = doStartDevice();
+            } else {
+                next = doCheck();
+            }
             break;
         case AgentHealthState::ERROR:
             next = doCheck();
@@ -291,10 +299,50 @@ AgentHealthState Watchdog::doInitDevice() {
 
     init_failures_ = 0;
     consecutive_failures_ = 0;
+    start_pending_ = true;
     last_reason_ = "init_device_succeeded";
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
         "init_device succeeded for agent=" + agent_name,
         {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "init_device"}});
+    return AgentHealthState::HEALTHY;
+}
+
+AgentHealthState Watchdog::doStartDevice() {
+    const auto agent_name = activeAgent();
+    const auto request_id = makeWatchdogRequestId(agent_name, "start_device");
+    common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
+        "triggering start_device for agent=" + agent_name,
+        {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "start_device"}});
+
+    bus_.publish({
+        .request_id = request_id,
+        .source = msg::WATCHDOG,
+        .target = msg::AGENT_MANAGER,
+        .type = msg::CMD_REQUEST,
+        .payload = {
+            {"request_id", request_id},
+            {"agent_name", agent_name},
+            {"cmd", "start_device"},
+            {"params", nlohmann::json::object()},
+            {"priority", "high"},
+            {"silent", true},
+        },
+    });
+
+    auto opt = waitForResult(request_id, "start_device", 30000);
+    if (!opt || !opt->payload.value("success", false)) {
+        last_reason_ = opt ? "start_device_failed" : "start_device_timeout";
+        common::Logger::instance().log(common::LogLevel::Error, "Watchdog",
+            "start_device failed for agent=" + agent_name,
+            {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "start_device"}});
+        return AgentHealthState::ERROR;
+    }
+
+    consecutive_failures_ = 0;
+    last_reason_ = "start_device_succeeded";
+    common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
+        "start_device succeeded for agent=" + agent_name,
+        {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "start_device"}});
     return AgentHealthState::HEALTHY;
 }
 
