@@ -8,6 +8,7 @@
 #include "recordlab_host/scripts/scripts_actuator.h"
 
 #include <QMainWindow>
+#include <QDateTime>
 #include <QStringList>
 #include <QTimer>
 #include <QPair>
@@ -70,6 +71,9 @@ private:
     void handleDialogRequest(const HostMessage& msg);
     void appendLog(const QString& message);
     void reportQtException(const QString& context, const std::exception* error = nullptr);
+    void updateSummaryPollingForActiveAgent();
+    void pollAgentSummary();
+    bool handleSummaryCmdResult(const HostMessage& msg);
 
     // ── Paths / config ─────────────────────────────────────────
     std::string agents_config_path_;
@@ -93,6 +97,10 @@ private:
     std::unique_ptr<DataRegistryServer> data_registry_server_;
     std::unique_ptr<ScriptsActuator> scripts_actuator_;
     QTimer* bus_poll_timer_ = nullptr;
+    QTimer* summary_poll_timer_ = nullptr;
+    QString summary_data_name_;
+    QString summary_request_id_;
+    int summary_poll_interval_ms_ = 1000;
 
     // ── UI ─────────────────────────────────────────────────────
     QStackedWidget* stack_ = nullptr;

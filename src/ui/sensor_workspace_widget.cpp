@@ -27,6 +27,7 @@
 #include <cmath>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace recordlab::host::ui {
@@ -76,8 +77,20 @@ QString imuLabelForType(int type) {
     }
 }
 
+QString fallbackChannelLabel(const QString& topic, int type) {
+    if (topic == QStringLiteral("imu_data")) {
+        return imuLabelForType(type);
+    }
+    return QStringLiteral("%1:%2").arg(topic).arg(type);
+}
+
 bool isTemperatureType(int type) {
     return type == 12 || type == 13;
+}
+
+bool isTemperatureLabel(const QString& label) {
+    return label.contains(QStringLiteral("temperature"), Qt::CaseInsensitive)
+        || label.contains(QStringLiteral("温度"));
 }
 
 QString frequencyText(double frequency) {
@@ -87,16 +100,35 @@ QString frequencyText(double frequency) {
     return QStringLiteral("%1Hz").arg(frequency, 0, 'f', frequency >= 100.0 ? 0 : 1);
 }
 
-void setListItemText(QListWidget* list, int row, const QString& name, double frequency) {
+QString dataStatusText(bool has_data) {
+    return has_data ? QStringLiteral("✓") : QStringLiteral("✗");
+}
+
+QString summaryLineForJson(const nlohmann::json& value) {
+    if (value.is_string()) {
+        return QString::fromStdString(value.get<std::string>());
+    }
+    if (value.is_null()) {
+        return QStringLiteral("--");
+    }
+    return QString::fromStdString(value.dump());
+}
+
+void setListItemText(QListWidget* list, int row, const QString& name, double frequency, bool has_data) {
     if (!list || row < 0 || row >= list->count()) {
         return;
     }
-    list->item(row)->setText(QStringLiteral("%1 [%2]").arg(name, frequencyText(frequency)));
+    list->item(row)->setText(QStringLiteral("%1 %2 [%3]")
+        .arg(dataStatusText(has_data), name, frequencyText(frequency)));
 }
 
 QString dataNameFromListText(const QString& text) {
     const int frequency_pos = text.indexOf(QStringLiteral(" ["));
-    return (frequency_pos >= 0 ? text.left(frequency_pos) : text).trimmed();
+    QString name = (frequency_pos >= 0 ? text.left(frequency_pos) : text).trimmed();
+    if (name.startsWith(QStringLiteral("✓ ")) || name.startsWith(QStringLiteral("✗ "))) {
+        name = name.mid(2).trimmed();
+    }
+    return name;
 }
 
 bool jsonNumberAt(const nlohmann::json& value, std::size_t index, double& out) {
@@ -109,6 +141,42 @@ bool jsonNumberAt(const nlohmann::json& value, std::size_t index, double& out) {
     }
     out = item.get<double>();
     return std::isfinite(out);
+}
+
+std::optional<double> jsonNumberField(const nlohmann::json& value, const char* field) {
+    if (!value.is_object()) {
+        return std::nullopt;
+    }
+    const auto it = value.find(field);
+    if (it == value.end() || !it->is_number()) {
+        return std::nullopt;
+    }
+    const double number = it->get<double>();
+    if (!std::isfinite(number) || number <= 0.0) {
+        return std::nullopt;
+    }
+    return number;
+}
+
+std::optional<double> timestampSecondsForCurve(const nlohmann::json& value) {
+    if (const auto timestamp_ns = jsonNumberField(value, "timestamp_ns")) {
+        return *timestamp_ns / 1e9;
+    }
+    if (const auto timestamp_us = jsonNumberField(value, "timestamp_us")) {
+        return *timestamp_us / 1e6;
+    }
+    if (const auto timestamp = jsonNumberField(value, "timestamp")) {
+        // Some payloads use timestamp for microseconds, while others already
+        // send seconds. Keep this normalization local to display only.
+        if (*timestamp >= 1e16) {
+            return *timestamp / 1e9;
+        }
+        if (*timestamp >= 1e12) {
+            return *timestamp / 1e6;
+        }
+        return *timestamp;
+    }
+    return std::nullopt;
 }
 
 }  // namespace
@@ -133,6 +201,12 @@ public:
             }
         }
         setProperty("curve_sample_count", samples_.size());
+        if (!samples_.isEmpty()) {
+            const auto& latest = samples_.back();
+            setProperty("curve_latest_x", latest[1]);
+            setProperty("curve_latest_y", latest[2]);
+            setProperty("curve_latest_z", latest[3]);
+        }
         update();
     }
 
@@ -140,13 +214,16 @@ public:
         selected_data_name_ = data_name;
         samples_.clear();
         setProperty("curve_sample_count", 0);
+        setProperty("curve_latest_x", QVariant());
+        setProperty("curve_latest_y", QVariant());
+        setProperty("curve_latest_z", QVariant());
         update();
     }
 
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, false);
+        painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setRenderHint(QPainter::TextAntialiasing, true);
         painter.fillRect(rect(), QColor(QStringLiteral("#fafafa")));
 
@@ -258,7 +335,8 @@ protected:
                 painter.drawLine(x, chart_rect.top(), x, chart_rect.bottom());
             }
 
-            QPainterPath path;
+            QVector<QPointF> points;
+            points.reserve(samples_.size());
             for (int i = 0; i < samples_.size(); ++i) {
                 const auto& sample = samples_[i];
                 const double relative_timestamp = std::max(0.0, sample[0] - visible_start);
@@ -268,22 +346,28 @@ protected:
                 const double value_ratio = denominator <= 1e-9 ? 0.5 : (value - min_value) / denominator;
                 const qreal x = chart_rect.left() + time_ratio * chart_rect.width();
                 const qreal y = chart_rect.bottom() - value_ratio * chart_rect.height();
-                if (i == 0) path.moveTo(x, y);
-                else path.lineTo(x, y);
+                points.push_back(QPointF(x, y));
             }
 
+            QPainterPath path;
+            if (!points.isEmpty()) {
+                path.moveTo(points.front());
+                for (int i = 1; i < points.size(); ++i) {
+                    path.lineTo(points[i]);
+                }
+            }
             painter.setPen(QPen(colors[axis], 2));
             painter.drawPath(path);
             painter.setPen(QColor(QStringLiteral("#6b6b6b")));
             painter.drawText(QRect(chart_rect.left(), chart_rect.bottom() + 4, 72, 18),
                              Qt::AlignLeft | Qt::AlignVCenter,
-                             QStringLiteral("%1").arg(visible_start, 0, 'f', 1));
+                             QStringLiteral("0.0"));
             painter.drawText(QRect(chart_rect.center().x() - 44, chart_rect.bottom() + 4, 88, 18),
                              Qt::AlignHCenter | Qt::AlignVCenter,
-                             QStringLiteral("%1").arg(visible_start + visible_span / 2.0, 0, 'f', 1));
+                             QStringLiteral("%1").arg(visible_span / 2.0, 0, 'f', 1));
             painter.drawText(QRect(chart_rect.right() - 72, chart_rect.bottom() + 4, 72, 18),
                              Qt::AlignRight | Qt::AlignVCenter,
-                             QStringLiteral("%1").arg(visible_end, 0, 'f', 1));
+                             QStringLiteral("%1").arg(visible_span, 0, 'f', 1));
             painter.setPen(colors[axis].darker(105));
             painter.drawText(stats_rect, Qt::AlignCenter | Qt::TextWordWrap,
                              QStringLiteral("mean:%1\nstd:%2  pkpk:%3")
@@ -361,8 +445,13 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
     stream_label_by_key_.clear();
     label_key_by_label_.clear();
     list_row_by_label_.clear();
-    curve_history_.clear();
+    channel_stream_keys_.clear();
+    summary_only_labels_.clear();
+    labels_with_data_.clear();
+    summary_value_blocks_.clear();
     realtime_value_lines_.clear();
+    smoothed_value_by_label_.clear();
+    curve_history_.clear();
     selected_data_name_.clear();
     if (curve_widget_) curve_widget_->clearSeries();
     if (!data_selection_list_ || !custom_data_list_ || sensor_layout_.empty()) {
@@ -370,26 +459,36 @@ void SensorWorkspaceWidget::configureLayout(const nlohmann::json& sensor_layout)
     }
     data_selection_list_->clear();
     custom_data_list_->clear();
-    const auto addItem = [&](QListWidget* list, const QString& label, const QString& stream_key) {
+    const auto addItem = [&](QListWidget* list, const QString& label, const QString& stream_key, bool summary_only) {
         const int row = list->count();
-        list->addItem(QStringLiteral("%1 [--Hz]").arg(label));
+        if (summary_only) {
+            list->addItem(label);
+            summary_only_labels_.insert(label);
+            summary_value_blocks_[label] = QStringLiteral("最新数据\n--\n更新时间: --");
+        } else {
+            list->addItem(QStringLiteral("✗ %1 [--Hz]").arg(label));
+        }
         list_row_by_label_[label] = row;
         label_key_by_label_[label] = stream_key;
         stream_label_by_key_[stream_key] = label;
     };
-    const auto imu = sensor_layout_.find("imu_data");
-    if (imu != sensor_layout_.end() && imu->is_object()) {
-        for (const auto& channel : imu->value("channels", nlohmann::json::array())) {
-            if (!channel.is_object()) continue;
-            const int type = channel.value("type", 0);
-            const QString label = QString::fromStdString(channel.value("label", std::string("imu_data")));
-            addItem(data_selection_list_, label, QStringLiteral("imu_data:%1").arg(type));
-        }
-    }
     for (const auto& [topic, layout] : sensor_layout_.items()) {
-        if (topic == "imu_data" || !layout.is_object()) continue;
+        if (!layout.is_object()) continue;
+        const auto channels = layout.find("channels");
+        if (channels != layout.end() && channels->is_array()) {
+            for (const auto& channel : *channels) {
+                if (!channel.is_object()) continue;
+                const int type = channel.value("type", 0);
+                const QString label = QString::fromStdString(channel.value("label", topic));
+                const QString stream_key = QStringLiteral("%1:%2").arg(QString::fromStdString(topic)).arg(type);
+                channel_stream_keys_.insert(stream_key);
+                addItem(data_selection_list_, label, stream_key, false);
+            }
+            continue;
+        }
         const QString label = QString::fromStdString(layout.value("display_name", topic));
-        addItem(custom_data_list_, label, QString::fromStdString(topic));
+        const bool summary_only = layout.value("ui_widget", std::string{}) == "summary_value";
+        addItem(custom_data_list_, label, QString::fromStdString(topic), summary_only);
     }
     renderRealtimeValues();
 }
@@ -434,25 +533,36 @@ void SensorWorkspaceWidget::resetTopicData(const QString& data_name) {
 }
 
 void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const nlohmann::json& value, double frequency) {
-    updateFrequencyLabels(data_name, value, frequency);
-    if (data_name == QStringLiteral("imu_data") && value.is_object()) {
+    if (value.is_object()) {
         const int type = value.value("type", 0);
-        const QString stream_key = QStringLiteral("imu_data:%1").arg(type);
+        const QString stream_key = QStringLiteral("%1:%2").arg(data_name).arg(type);
         const auto configured_label = stream_label_by_key_.find(stream_key);
+        if (configured_label == stream_label_by_key_.end()
+            && channel_stream_keys_.find(stream_key) == channel_stream_keys_.end()) {
+            // This object is not a configured typed sensor stream.
+        } else {
         const QString label = configured_label == stream_label_by_key_.end()
-            ? imuLabelForType(type)
+            ? fallbackChannelLabel(data_name, type)
             : configured_label->second;
-        appendCurveSample(label, value);
+        const auto smoothed = appendCurveSample(label, value);
+        if (smoothed) {
+            labels_with_data_.insert(label);
+        }
+        updateFrequencyLabels(data_name, value, frequency);
         QString value_text = QStringLiteral("type:%1 ").arg(type);
         if (value.contains("data") && value["data"].is_array() && !value["data"].empty()) {
-            if (isTemperatureType(type)) {
+            if (isTemperatureType(type) || isTemperatureLabel(label)) {
+                const double shown = smoothed ? (*smoothed)[0] : value["data"][0].get<double>();
                 value_text += QStringLiteral("temperature:%1")
-                            .arg(value["data"][0].get<double>(), 0, 'f', 2);
+                            .arg(shown, 0, 'f', 2);
             } else if (value["data"].size() >= 3) {
+                const double shown_x = smoothed ? (*smoothed)[0] : value["data"][0].get<double>();
+                const double shown_y = smoothed ? (*smoothed)[1] : value["data"][1].get<double>();
+                const double shown_z = smoothed ? (*smoothed)[2] : value["data"][2].get<double>();
                 value_text += QStringLiteral("x:%1 y:%2 z:%3")
-                        .arg(value["data"][0].get<double>(), 0, 'f', 3)
-                        .arg(value["data"][1].get<double>(), 0, 'f', 3)
-                        .arg(value["data"][2].get<double>(), 0, 'f', 3);
+                        .arg(shown_x, 0, 'f', 3)
+                        .arg(shown_y, 0, 'f', 3)
+                        .arg(shown_z, 0, 'f', 3);
             }
         }
         updateRealtimeValueLine(label, value_text.trimmed());
@@ -464,6 +574,7 @@ void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const n
             }
         }
         return;
+        }
     }
     if (data_name == QStringLiteral("camera_data") && value.is_object()) {
         handleCameraData(value);
@@ -490,6 +601,36 @@ void SensorWorkspaceWidget::handleRealtimeData(const QString& data_name, const n
     if (data_name == QStringLiteral("time_delay")) {
         return;
     }
+}
+
+void SensorWorkspaceWidget::handleSummaryData(const QString& data_name, const nlohmann::json& value) {
+    if (data_name.trimmed().isEmpty()) {
+        return;
+    }
+    QStringList lines;
+    lines << QStringLiteral("最新数据");
+
+    const auto latest_lines_it = value.find("latest_csv_lines");
+    if (latest_lines_it != value.end() && latest_lines_it->is_object() && !latest_lines_it->empty()) {
+        for (const auto& [file_name, latest_line] : latest_lines_it->items()) {
+            lines << QStringLiteral("%1: %2")
+                         .arg(QString::fromStdString(file_name), summaryLineForJson(latest_line));
+        }
+    } else {
+        lines << QStringLiteral("--");
+    }
+
+    QString update_time = QStringLiteral("--");
+    const auto update_time_it = value.find("latest_update_time");
+    if (update_time_it != value.end() && update_time_it->is_string()) {
+        const QString raw = QString::fromStdString(update_time_it->get<std::string>()).trimmed();
+        if (!raw.isEmpty()) {
+            update_time = raw;
+        }
+    }
+    lines << QStringLiteral("更新时间: %1").arg(update_time);
+
+    updateSummaryValueBlock(data_name, lines.join(QStringLiteral("\n")));
 }
 
 QWidget* SensorWorkspaceWidget::buildLeftPanel() {
@@ -626,21 +767,19 @@ void SensorWorkspaceWidget::updateFrequencyLabels(const QString& data_name, cons
                     if (label_it == stream_label_by_key_.end()) continue;
                     const auto row_it = list_row_by_label_.find(label_it->second);
                     if (row_it == list_row_by_label_.end()) continue;
-                    QListWidget* list = stream_key.startsWith(QStringLiteral("imu_data:"))
+                    QListWidget* list = channel_stream_keys_.find(stream_key) != channel_stream_keys_.end()
                         ? data_selection_list_
                         : custom_data_list_;
-                    setListItemText(list, row_it->second, label_it->second, frequency_value.get<double>());
-                }
-                if (data_name != QStringLiteral("imu_data")) {
-                    return;
+                    const bool has_data = labels_with_data_.find(label_it->second) != labels_with_data_.end();
+                    setListItemText(list, row_it->second, label_it->second, frequency_value.get<double>(), has_data);
                 }
             }
         }
     }
 
     QString stream_key = data_name;
-    if (data_name == QStringLiteral("imu_data") && value.is_object()) {
-        stream_key = QStringLiteral("imu_data:%1").arg(value.value("type", 0));
+    if (value.is_object() && value.contains("type")) {
+        stream_key = QStringLiteral("%1:%2").arg(data_name).arg(value.value("type", 0));
     }
     const auto label_it = stream_label_by_key_.find(stream_key);
     if (label_it == stream_label_by_key_.end()) {
@@ -650,10 +789,11 @@ void SensorWorkspaceWidget::updateFrequencyLabels(const QString& data_name, cons
     if (row_it == list_row_by_label_.end()) {
         return;
     }
-    QListWidget* list = stream_key.startsWith(QStringLiteral("imu_data:"))
+    QListWidget* list = channel_stream_keys_.find(stream_key) != channel_stream_keys_.end()
         ? data_selection_list_
         : custom_data_list_;
-    setListItemText(list, row_it->second, label_it->second, frequency);
+    const bool has_data = labels_with_data_.find(label_it->second) != labels_with_data_.end();
+    setListItemText(list, row_it->second, label_it->second, frequency, has_data);
 }
 
 void SensorWorkspaceWidget::updateSelectedDataFromItem(QListWidgetItem* item) {
@@ -669,9 +809,9 @@ void SensorWorkspaceWidget::updateSelectedDataFromItem(QListWidgetItem* item) {
     refreshSelectedCurves();
 }
 
-void SensorWorkspaceWidget::appendCurveSample(const QString& key, const nlohmann::json& value) {
+std::optional<std::array<double, 3>> SensorWorkspaceWidget::appendCurveSample(const QString& key, const nlohmann::json& value) {
     if (key.isEmpty()) {
-        return;
+        return std::nullopt;
     }
     auto& history = curve_history_[key];
     constexpr std::size_t kMaxCurveSamples = 600;
@@ -680,28 +820,42 @@ void SensorWorkspaceWidget::appendCurveSample(const QString& key, const nlohmann
     double y = 0.0;
     double z = 0.0;
     if (!jsonNumberAt(value, 0, x)) {
-        return;
+        return std::nullopt;
     }
-    if (!isTemperatureType(type)) {
+    if (!isTemperatureType(type) && !isTemperatureLabel(key)) {
         if (!jsonNumberAt(value, 1, y) || !jsonNumberAt(value, 2, z)) {
-            return;
+            return std::nullopt;
         }
     }
-    const double timestamp = value.value("timestamp", value.value("timestamp_ns", 0.0) / 1e9);
-    const double display_timestamp = timestamp > 0.0
-        ? timestamp
+    const auto timestamp = timestampSecondsForCurve(value);
+    const double display_timestamp = timestamp
+        ? *timestamp
         : (history.empty() ? 0.0 : history.back()[0] + 0.01);
     if (!history.empty() &&
         (display_timestamp < history.back()[0] - 1.0 || display_timestamp > history.back()[0] + 10.0)) {
         history.clear();
+        smoothed_value_by_label_.erase(key);
         if (selected_data_name_ == key && curve_widget_) {
             curve_widget_->clearSeries(key);
         }
     }
-    history.push_back({display_timestamp, x, y, z});
+
+    const std::array<double, 3> raw{x, y, z};
+    auto smooth_it = smoothed_value_by_label_.find(key);
+    std::array<double, 3> smoothed = raw;
+    if (smooth_it != smoothed_value_by_label_.end()) {
+        const double alpha = isTemperatureType(type) || isTemperatureLabel(key) ? 0.55 : 0.22;
+        for (std::size_t i = 0; i < smoothed.size(); ++i) {
+            smoothed[i] = smooth_it->second[i] + alpha * (raw[i] - smooth_it->second[i]);
+        }
+    }
+    smoothed_value_by_label_[key] = smoothed;
+
+    history.push_back({display_timestamp, smoothed[0], smoothed[1], smoothed[2]});
     while (history.size() > kMaxCurveSamples) {
         history.pop_front();
     }
+    return smoothed;
 }
 
 void SensorWorkspaceWidget::updateRealtimeValueLine(const QString& label, const QString& value_text) {
@@ -709,6 +863,16 @@ void SensorWorkspaceWidget::updateRealtimeValueLine(const QString& label, const 
         return;
     }
     realtime_value_lines_[label] = value_text.isEmpty() ? QStringLiteral("--") : value_text;
+    renderRealtimeValues();
+}
+
+void SensorWorkspaceWidget::updateSummaryValueBlock(const QString& label, const QString& value_text) {
+    if (label.isEmpty()) {
+        return;
+    }
+    summary_value_blocks_[label] = value_text.trimmed().isEmpty()
+        ? QStringLiteral("最新数据\n--\n更新时间: --")
+        : value_text;
     renderRealtimeValues();
 }
 
@@ -723,7 +887,23 @@ void SensorWorkspaceWidget::renderRealtimeValues() {
             labels << dataNameFromListText(data_selection_list_->item(row)->text());
         }
     }
+    if (custom_data_list_ && custom_data_list_->count() > 0) {
+        for (int row = 0; row < custom_data_list_->count(); ++row) {
+            const QString label = dataNameFromListText(custom_data_list_->item(row)->text());
+            if (summary_only_labels_.find(label) != summary_only_labels_.end()) {
+                labels << label;
+            }
+        }
+    }
     for (const auto& label : labels) {
+        if (summary_only_labels_.find(label) != summary_only_labels_.end()) {
+            const auto summary_it = summary_value_blocks_.find(label);
+            lines << label;
+            lines << (summary_it != summary_value_blocks_.end()
+                ? summary_it->second
+                : QStringLiteral("最新数据\n--\n更新时间: --"));
+            continue;
+        }
         const auto it = realtime_value_lines_.find(label);
         QString value_text;
         if (it != realtime_value_lines_.end()) {
@@ -752,7 +932,7 @@ void SensorWorkspaceWidget::refreshSelectedCurves() {
         return;
     }
     curve_widget_->setSeries(selected_data_name_, history_it->second,
-                             selected_data_name_.contains(QStringLiteral("temperature")));
+                             isTemperatureLabel(selected_data_name_));
 }
 
 void SensorWorkspaceWidget::handleCameraData(const nlohmann::json& value) {

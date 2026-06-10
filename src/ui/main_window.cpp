@@ -11,7 +11,10 @@
 
 #include <QComboBox>
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
+#include <QFormLayout>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -20,9 +23,11 @@
 #include <QPushButton>
 #include <QUuid>
 #include <QStackedWidget>
+#include <QVBoxLayout>
 
 #include <exception>
 #include <cstdlib>
+#include <algorithm>
 
 namespace recordlab::host::ui {
 
@@ -55,12 +60,24 @@ bool workflowStepHasStatus(const nlohmann::json& payload,
     return false;
 }
 
-bool jsonBoolValue(const nlohmann::json& object, const char* key, bool fallback = false) {
-    if (!object.is_object()) return fallback;
-    const auto it = object.find(key);
-    if (it == object.end() || it->is_null()) return fallback;
-    if (it->is_boolean()) return it->get<bool>();
-    return fallback;
+bool extractSummaryPollConfig(const nlohmann::json& sensor_layout,
+                              QString& summary_data_name,
+                              int& poll_interval_ms) {
+    if (!sensor_layout.is_object()) {
+        return false;
+    }
+    for (const auto& [topic, layout] : sensor_layout.items()) {
+        if (!layout.is_object()) {
+            continue;
+        }
+        if (layout.value("ui_widget", std::string{}) != "summary_value") {
+            continue;
+        }
+        summary_data_name = QString::fromStdString(layout.value("display_name", topic));
+        poll_interval_ms = std::max(200, layout.value("poll_interval_ms", 1000));
+        return !summary_data_name.trimmed().isEmpty();
+    }
+    return false;
 }
 
 QString replaceTemplateVars(QString text, const nlohmann::json& vars) {
@@ -75,6 +92,95 @@ QString replaceTemplateVars(QString text, const nlohmann::json& vars) {
         text.replace(QStringLiteral("${%1}").arg(QString::fromStdString(key)), replacement);
     }
     return text;
+}
+
+QString jsonToQString(const nlohmann::json& value, const QString& fallback = {}) {
+    if (value.is_string()) return QString::fromStdString(value.get<std::string>());
+    if (value.is_boolean()) return value.get<bool>() ? QStringLiteral("true") : QStringLiteral("false");
+    if (value.is_number_integer()) return QString::number(value.get<long long>());
+    if (value.is_number_unsigned()) return QString::number(value.get<unsigned long long>());
+    if (value.is_number_float()) return QString::number(value.get<double>());
+    if (!value.is_null()) return QString::fromStdString(value.dump());
+    return fallback;
+}
+
+bool jsonBoolValue(const nlohmann::json& object, const char* key, bool fallback = false) {
+    if (!object.is_object()) return fallback;
+    const auto it = object.find(key);
+    if (it == object.end() || it->is_null()) return fallback;
+    if (it->is_boolean()) return it->get<bool>();
+    if (it->is_number_integer()) return it->get<long long>() != 0;
+    if (it->is_number_unsigned()) return it->get<unsigned long long>() != 0;
+    if (it->is_string()) {
+        const auto value = QString::fromStdString(it->get<std::string>()).trimmed().toLower();
+        if (value == QStringLiteral("true") || value == QStringLiteral("1")) return true;
+        if (value == QStringLiteral("false") || value == QStringLiteral("0")) return false;
+    }
+    return fallback;
+}
+
+nlohmann::json showMultiFieldInputDialog(QWidget* parent,
+                                         const QString& title,
+                                         const QString& message,
+                                         const nlohmann::json& fields,
+                                         bool* accepted) {
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+    auto* layout = new QVBoxLayout(&dialog);
+    if (!message.trimmed().isEmpty()) {
+        auto* message_label = new QLabel(message, &dialog);
+        message_label->setWordWrap(true);
+        layout->addWidget(message_label);
+    }
+
+    auto* form = new QFormLayout();
+    std::vector<std::pair<std::string, QWidget*>> widgets;
+    if (fields.is_array()) {
+        for (const auto& field : fields) {
+            if (!field.is_object()) continue;
+            const std::string name = field.value("name", std::string{});
+            if (name.empty()) continue;
+            const QString label = QString::fromStdString(field.value("label", name));
+            const QString default_value = field.contains("default")
+                ? jsonToQString(field["default"])
+                : QString{};
+            QWidget* editor = nullptr;
+            const auto choices_it = field.find("choices");
+            if (choices_it != field.end() && choices_it->is_array()) {
+                auto* combo = new QComboBox(&dialog);
+                for (const auto& choice : *choices_it) {
+                    combo->addItem(jsonToQString(choice));
+                }
+                const int index = combo->findText(default_value);
+                if (index >= 0) combo->setCurrentIndex(index);
+                editor = combo;
+            } else {
+                auto* line_edit = new QLineEdit(default_value, &dialog);
+                editor = line_edit;
+            }
+            form->addRow(label, editor);
+            widgets.emplace_back(name, editor);
+        }
+    }
+    layout->addLayout(form);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    const bool ok = dialog.exec() == QDialog::Accepted;
+    if (accepted) *accepted = ok;
+    nlohmann::json result = nlohmann::json::object();
+    if (!ok) return result;
+    for (const auto& [name, widget] : widgets) {
+        if (auto* combo = qobject_cast<QComboBox*>(widget)) {
+            result[name] = combo->currentText().toStdString();
+        } else if (auto* line_edit = qobject_cast<QLineEdit*>(widget)) {
+            result[name] = line_edit->text().toStdString();
+        }
+    }
+    return result;
 }
 
 }  // namespace
@@ -144,6 +250,18 @@ MainWindow::MainWindow(std::string agents_config_path,
         }
     });
     bus_poll_timer_->start();
+
+    summary_poll_timer_ = new QTimer(this);
+    summary_poll_timer_->setInterval(1000);
+    connect(summary_poll_timer_, &QTimer::timeout, this, [this]() {
+        try {
+            pollAgentSummary();
+        } catch (const std::exception& e) {
+            reportQtException(QStringLiteral("pollAgentSummary"), &e);
+        } catch (...) {
+            reportQtException(QStringLiteral("pollAgentSummary"));
+        }
+    });
 
     // ── UI ─────────────────────────────────────────────────────
     stack_ = new QStackedWidget(this);
@@ -265,6 +383,9 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
 
     // ── AgentManager messages ──
     if (m.type == msg::CMD_RESULT) {
+        if (handleSummaryCmdResult(m)) {
+            return;
+        }
         if (isCheckCommand(m.payload.value("cmd", std::string{}))) {
             return;
         }
@@ -313,8 +434,14 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
                     }
                 }
             }
+            updateSummaryPollingForActiveAgent();
         } else {
             active_agent_connected_ = false;
+            if (summary_poll_timer_) {
+                summary_poll_timer_->stop();
+            }
+            summary_request_id_.clear();
+            summary_data_name_.clear();
         }
         return;
     }
@@ -466,6 +593,12 @@ void MainWindow::handleDialogRequest(const HostMessage& m) {
                                                     QString::fromStdString(m.payload.value("default", std::string{})), &ok);
         response["cancelled"] = !ok;
         response["response"] = value.toStdString();
+    } else if (kind == QStringLiteral("multi_field_input")) {
+        bool ok = false;
+        response["response"] = showMultiFieldInputDialog(this, title, message,
+                                                         m.payload.value("fields", nlohmann::json::array()),
+                                                         &ok);
+        response["cancelled"] = !ok;
     } else {
         if (kind == QStringLiteral("error")) QMessageBox::critical(this, title, message);
         else if (kind == QStringLiteral("warning")) QMessageBox::warning(this, title, message);
@@ -484,6 +617,11 @@ void MainWindow::handleDialogRequest(const HostMessage& m) {
 
 void MainWindow::activateAgent(const QString& agent_name) {
     try {
+        if (summary_poll_timer_) {
+            summary_poll_timer_->stop();
+        }
+        summary_request_id_.clear();
+        summary_data_name_.clear();
         active_agent_ = agent_name;
         active_agent_connected_ = false;
         if (watchdog_) watchdog_->setActiveAgent(agent_name.toStdString());
@@ -496,6 +634,82 @@ void MainWindow::activateAgent(const QString& agent_name) {
     } catch (...) {
         reportQtException(QStringLiteral("activateAgent"));
     }
+}
+
+void MainWindow::updateSummaryPollingForActiveAgent() {
+    if (!summary_poll_timer_) {
+        return;
+    }
+    summary_poll_timer_->stop();
+    summary_request_id_.clear();
+    summary_data_name_.clear();
+    summary_poll_interval_ms_ = 1000;
+    if (active_agent_.trimmed().isEmpty() || !agent_manager_) {
+        return;
+    }
+    try {
+        const auto config = agent_manager_->loadAgentConfig(active_agent_.toStdString());
+        if (!extractSummaryPollConfig(config.sensor_layout, summary_data_name_, summary_poll_interval_ms_)) {
+            return;
+        }
+        summary_poll_timer_->setInterval(summary_poll_interval_ms_);
+        pollAgentSummary();
+        summary_poll_timer_->start();
+    } catch (...) {
+    }
+}
+
+void MainWindow::pollAgentSummary() {
+    if (active_agent_.trimmed().isEmpty() || summary_data_name_.trimmed().isEmpty()) {
+        return;
+    }
+    const QString request_id = QStringLiteral("summary_%1")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    summary_request_id_ = request_id;
+    bus_.publish({
+        .request_id = request_id.toStdString(),
+        .source = msg::UI,
+        .target = msg::AGENT_MANAGER,
+        .type = msg::CMD_REQUEST,
+        .payload = {
+            {"request_id", request_id.toStdString()},
+            {"agent_name", active_agent_.toStdString()},
+            {"cmd", "get_runtime_state"},
+            {"params", nlohmann::json::object()},
+            {"priority", "normal"},
+            {"silent", true},
+        },
+    });
+}
+
+bool MainWindow::handleSummaryCmdResult(const HostMessage& m) {
+    const std::string request_id = m.request_id.empty()
+        ? m.payload.value("request_id", std::string{})
+        : m.request_id;
+    if (summary_request_id_.trimmed().isEmpty()
+        || QString::fromStdString(request_id) != summary_request_id_) {
+        return false;
+    }
+    summary_request_id_.clear();
+    if (!workspace_page_ || summary_data_name_.trimmed().isEmpty()) {
+        return true;
+    }
+    if (!m.payload.value("success", false)) {
+        return true;
+    }
+    nlohmann::json summary = nlohmann::json::object();
+    if (m.payload.contains("result") && m.payload["result"].is_object()) {
+        summary = m.payload["result"];
+    }
+    if (summary.empty()) {
+        summary = m.payload;
+    }
+    if (!summary.contains("latest_update_time")) {
+        summary["latest_update_time"] = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss")).toStdString();
+    }
+    workspace_page_->scriptPage()->sensorWorkspace()->handleSummaryData(summary_data_name_, summary);
+    workspace_page_->dataPage()->sensorWorkspace()->handleSummaryData(summary_data_name_, summary);
+    return true;
 }
 
 void MainWindow::sendCommand(const QString& cmd, const QString& params_json) {
@@ -561,6 +775,9 @@ void MainWindow::stopScript() {
 
 void MainWindow::shutdown() {
     try {
+        if (summary_poll_timer_) {
+            summary_poll_timer_->stop();
+        }
         if (watchdog_) {
             watchdog_->stop();
             watchdog_.reset();
