@@ -15,6 +15,7 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFormLayout>
+#include <QFont>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -203,7 +204,23 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
                 auto* line_edit = new QLineEdit(default_value, &dialog);
                 editor = line_edit;
             }
-            form->addRow(label, editor);
+            const int font_size_pt = field.value("font_size_pt", 0);
+            if (font_size_pt > 0) {
+                QFont editor_font = editor->font();
+                editor_font.setPointSize(font_size_pt);
+                editor->setFont(editor_font);
+                editor->setMinimumHeight(font_size_pt * 2);
+            }
+            const int min_width = field.value("min_width", 0);
+            if (min_width > 0) editor->setMinimumWidth(min_width);
+
+            auto* label_widget = new QLabel(label, &dialog);
+            if (font_size_pt > 0) {
+                QFont label_font = label_widget->font();
+                label_font.setPointSize(font_size_pt);
+                label_widget->setFont(label_font);
+            }
+            form->addRow(label_widget, editor);
             widgets.emplace_back(name, editor);
         }
     }
@@ -465,7 +482,9 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
             const auto agent_name = m.payload.value("agent_name", std::string{});
             active_agent_ = QString::fromStdString(agent_name);
             active_agent_connected_ = true;
-            if (watchdog_) watchdog_->setActiveAgent(agent_name);
+            if (watchdog_) {
+                watchdog_->setActiveAgent(agent_name, m.payload.value("watchdog_start_device", true));
+            }
             if (data_receiver_) {
                 const auto config = agent_manager_->loadAgentConfig(agent_name);
                 for (const auto& t : config.topics) {
@@ -500,7 +519,15 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         });
         if (watchdog_) {
             if (!active_agent_.trimmed().isEmpty()) {
-                watchdog_->setActiveAgent(active_agent_.toStdString());
+                const std::string active_agent = active_agent_.toStdString();
+                bool watchdog_start_device = true;
+                if (agent_manager_) {
+                    try {
+                        watchdog_start_device = agent_manager_->loadAgentConfig(active_agent).watchdog_start_device;
+                    } catch (...) {
+                    }
+                }
+                watchdog_->setActiveAgent(active_agent, watchdog_start_device);
             } else {
                 watchdog_->clearActiveAgent();
             }
@@ -679,7 +706,16 @@ void MainWindow::activateAgent(const QString& agent_name) {
         summary_data_name_.clear();
         active_agent_ = agent_name;
         active_agent_connected_ = false;
-        if (watchdog_) watchdog_->setActiveAgent(agent_name.toStdString());
+        if (watchdog_) {
+            bool watchdog_start_device = true;
+            if (agent_manager_) {
+                try {
+                    watchdog_start_device = agent_manager_->loadAgentConfig(agent_name.toStdString()).watchdog_start_device;
+                } catch (...) {
+                }
+            }
+            watchdog_->setActiveAgent(agent_name.toStdString(), watchdog_start_device);
+        }
         bus_.publish({
             .source = msg::UI, .target = msg::AGENT_MANAGER, .type = msg::ACTIVATE_AGENT,
             .payload = {{"agent_name", agent_name.toStdString()}},

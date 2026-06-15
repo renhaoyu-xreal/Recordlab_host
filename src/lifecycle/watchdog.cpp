@@ -51,13 +51,14 @@ AgentHealthState Watchdog::state() const {
     return state_.load();
 }
 
-void Watchdog::setActiveAgent(std::string agent_name) {
+void Watchdog::setActiveAgent(std::string agent_name, bool start_device_after_init) {
     {
         std::lock_guard<std::mutex> lock(agent_mutex_);
         agent_name_ = std::move(agent_name);
         monitored_agent_names_.clear();
         if (!agent_name_.empty()) monitored_agent_names_.push_back(agent_name_);
     }
+    start_device_after_init_ = start_device_after_init;
     consecutive_failures_ = 0;
     init_failures_ = 0;
     failure_stop_sent_ = false;
@@ -299,7 +300,7 @@ AgentHealthState Watchdog::doInitDevice() {
 
     init_failures_ = 0;
     consecutive_failures_ = 0;
-    start_pending_ = true;
+    start_pending_ = start_device_after_init_.load();
     last_reason_ = "init_device_succeeded";
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
         "init_device succeeded for agent=" + agent_name,

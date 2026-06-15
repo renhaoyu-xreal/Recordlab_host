@@ -41,7 +41,7 @@ public:
     AgentHealthState state() const;
 
     /// Bind the watchdog to an activated agent and start connectivity checks.
-    void setActiveAgent(std::string agent_name);
+    void setActiveAgent(std::string agent_name, bool start_device_after_init = true);
 
     /// Monitor a generic set of agents for the current script/session.
     void setMonitoredAgents(std::vector<std::string> agent_names, bool script_monitoring = false);
@@ -88,6 +88,7 @@ private:
     std::atomic<bool> failure_stop_sent_{false};
     std::atomic<bool> script_monitoring_{false};
     std::atomic<bool> start_pending_{false};
+    std::atomic<bool> start_device_after_init_{true};
     std::string last_reason_ = "startup";
 };
 

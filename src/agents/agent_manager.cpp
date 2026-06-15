@@ -163,6 +163,7 @@ void AgentManager::doActivateAgent(const std::string& agent_name) {
                 {"agent_name", agent_name}, {"success", true},
                 {"message", "Agent activated"},
                 {"subnode_host", config.subnode_host},
+                {"watchdog_start_device", config.watchdog_start_device},
                 {"topics", [&]() {
                     nlohmann::json arr = nlohmann::json::array();
                     for (const auto& t : config.topics)

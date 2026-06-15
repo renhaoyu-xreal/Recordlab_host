@@ -37,6 +37,7 @@ struct AgentConfig {
     int data_port = 0;
     std::string root_path;
     nlohmann::json init_device_params = nlohmann::json::object();
+    bool watchdog_start_device = true;
     std::vector<TopicConfig> topics;
     std::vector<std::string> default_scripts;
     std::vector<std::string> exposed_commands;
