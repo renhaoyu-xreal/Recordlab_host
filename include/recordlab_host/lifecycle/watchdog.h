@@ -57,7 +57,7 @@ private:
     AgentHealthState doCheck();
     AgentHealthState doInitDevice();
     AgentHealthState doStartDevice();
-    bool doRecoveryClose();
+    bool doRecoveryReboot();
     bool checkAgent(const std::string& agent_name, int timeout_ms, std::string* failure_reason);
     void sendEstopToMonitoredAgents();
     void sendStopRecordToMonitoredAgents();

@@ -290,7 +290,7 @@ AgentHealthState Watchdog::doInitDevice() {
                 std::to_string(kMaxInitRetries) + ")",
             {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "init_device"}});
         if (failures <= kMaxInitRetries) {
-            doRecoveryClose();
+            doRecoveryReboot();
             last_reason_ = "init_device_retry";
             return AgentHealthState::INITIALIZING;
         }
@@ -353,12 +353,12 @@ AgentHealthState Watchdog::doStartDevice() {
     return AgentHealthState::HEALTHY;
 }
 
-bool Watchdog::doRecoveryClose() {
+bool Watchdog::doRecoveryReboot() {
     const auto agent_name = activeAgent();
-    const auto request_id = makeWatchdogRequestId(agent_name, "release_device");
+    const auto request_id = makeWatchdogRequestId(agent_name, "reboot_device");
     common::Logger::instance().log(common::LogLevel::Warn, "Watchdog",
-        "attempting device close before init retry for agent=" + agent_name,
-        {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "release_device"}});
+        "attempting device reboot before init retry for agent=" + agent_name,
+        {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "reboot_device"}});
 
     bus_.publish({
         .request_id = request_id,
@@ -368,21 +368,21 @@ bool Watchdog::doRecoveryClose() {
         .payload = {
             {"request_id", request_id},
             {"agent_name", agent_name},
-            {"cmd", "release_device"},
+            {"cmd", "reboot_device"},
             {"params", nlohmann::json::object()},
             {"priority", "high"},
             {"silent", true},
         },
     });
 
-    auto opt = waitForResult(request_id, "release_device", 10000);
+    auto opt = waitForResult(request_id, "reboot_device", 60000);
     const bool success = opt && opt->payload.value("success", false);
     common::Logger::instance().log(
         success ? common::LogLevel::Info : common::LogLevel::Warn,
         "Watchdog",
-        "device close before init retry " + std::string(success ? "succeeded" : "failed") +
+        "device reboot before init retry " + std::string(success ? "succeeded" : "failed") +
             " for agent=" + agent_name,
-        {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "release_device"}});
+        {{"request_id", request_id}, {"agent_name", agent_name}, {"cmd", "reboot_device"}});
     return success;
 }
 

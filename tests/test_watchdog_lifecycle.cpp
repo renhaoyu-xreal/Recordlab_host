@@ -115,8 +115,8 @@ int main() {
             publishResult(bus, "init_device", false, "init failed");
             if (attempt < 2) {
                 auto release = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
-                assert(release.payload.value("cmd", "") == "release_device");
-                publishResult(bus, "release_device", true);
+                assert(release.payload.value("cmd", "") == "reboot_device");
+                publishResult(bus, "reboot_device", true);
             }
         }
 
