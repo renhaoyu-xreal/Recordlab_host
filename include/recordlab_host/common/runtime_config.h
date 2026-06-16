@@ -10,6 +10,7 @@ struct RuntimeConfig {
     std::string host_root;
     std::string agents_config_path;
     std::string nodes_root;
+    std::string product_config_path;
     std::string echo_python_root;
     std::string data_root;
     std::string logs_root;
@@ -17,6 +18,8 @@ struct RuntimeConfig {
     std::string node_runtime_module = "recordlab_nodes.core.node_runtime";
     std::string data_registry_host = "127.0.0.1";
     int data_registry_port = 16600;
+    std::string app_version = "v1.0.0";
+    std::string update_info;
 };
 
 class RuntimeConfigLoader {

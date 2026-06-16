@@ -14,6 +14,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSplitter>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <nlohmann/json.hpp>
 
@@ -86,6 +87,11 @@ int main(int argc, char** argv) {
     require(entry != nullptr, "entry page missing");
     require(entry->findChild<QPushButton*>("agent_button_imu_simulation") != nullptr, "agent button missing");
     require(!entry->summaryLabel()->isVisible(), "entry page should not show version/info summary");
+    auto* version_status = window.findChild<QLabel*>("app_version_status_label");
+    require(version_status != nullptr, "version status label missing");
+    require(version_status->text() == QStringLiteral("版本：v1.0.0"), "version status should use default fallback");
+    require(window.statusBar()->currentMessage() == QStringLiteral("主 Agent：未选择"),
+            "active agent text should live in the left status bar message area");
 
     auto* workspace = window.workspacePage();
     require(workspace != nullptr, "workspace page missing");
@@ -95,6 +101,11 @@ int main(int argc, char** argv) {
     require(delay_value_label != nullptr, "time delay value label missing");
     require(timer_value_label->text() == QStringLiteral("00:00.000"), "record timer should match legacy default format");
     require(delay_value_label->text() == QStringLiteral("0.000 ms"), "time delay should match legacy default format");
+
+    window.activateAgent(QStringLiteral("imu_simulation"));
+    QApplication::processEvents();
+    require(window.statusBar()->currentMessage() == QStringLiteral("主 Agent：imu_simulation"),
+            "active agent status should track selected agent");
 
     window.recordTimerChanged(61.234);
     window.timeDelayChanged(12.5);

@@ -40,7 +40,9 @@ int main(int argc, char** argv) {
         runtime.python_bin,
         runtime.node_runtime_module,
         runtime.data_registry_host,
-        runtime.data_registry_port);
+        runtime.data_registry_port,
+        runtime.app_version,
+        runtime.update_info);
     window.show();
     return app.exec();
 }

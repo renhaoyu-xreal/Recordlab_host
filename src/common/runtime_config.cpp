@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 
 namespace recordlab::host {
 namespace {
@@ -30,6 +31,44 @@ std::string jsonString(const nlohmann::json& doc, const char* key, const std::st
     return doc.value(key, fallback);
 }
 
+std::string stripJsonComments(const std::string& text) {
+    std::string result;
+    result.reserve(text.size());
+    bool in_string = false;
+    bool escaped = false;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char ch = text[i];
+        const char next = i + 1 < text.size() ? text[i + 1] : '\0';
+        if (in_string) {
+            result.push_back(ch);
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+            result.push_back(ch);
+            continue;
+        }
+        if (ch == '/' && next == '/') {
+            while (i < text.size() && text[i] != '\n') {
+                ++i;
+            }
+            if (i < text.size()) {
+                result.push_back(text[i]);
+            }
+            continue;
+        }
+        result.push_back(ch);
+    }
+    return result;
+}
+
 }  // namespace
 
 nlohmann::json RuntimeConfigLoader::loadJsonIfExists(const std::string& path) {
@@ -37,9 +76,13 @@ nlohmann::json RuntimeConfigLoader::loadJsonIfExists(const std::string& path) {
     if (!input) {
         return nlohmann::json::object();
     }
-    nlohmann::json doc;
-    input >> doc;
-    return doc;
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    const auto content = stripJsonComments(buffer.str());
+    if (content.empty()) {
+        return nlohmann::json::object();
+    }
+    return nlohmann::json::parse(content, nullptr, false);
 }
 
 RuntimeConfig RuntimeConfigLoader::load(const std::string& app_path,
@@ -72,6 +115,10 @@ RuntimeConfig RuntimeConfigLoader::load(const std::string& app_path,
         ? envOrEmpty("RECORDLAB_NODES_ROOT")
         : jsonString(doc, "nodes_root", default_nodes_root.string());
     cfg.nodes_root = absPath(host_root, nodes_root).string();
+    cfg.product_config_path = absPath(host_root, !envOrEmpty("RECORDLAB_PRODUCT_CONFIG").empty()
+        ? envOrEmpty("RECORDLAB_PRODUCT_CONFIG")
+        : jsonString(doc, "product_config_path",
+                     (fs::path(cfg.nodes_root) / "config" / "recordlab_product_config.jsonc").string())).string();
 
     const std::string echo_root = !envOrEmpty("ECHO_MESSAGE_SYSTEM_PYTHON_ROOT").empty()
         ? envOrEmpty("ECHO_MESSAGE_SYSTEM_PYTHON_ROOT")
@@ -97,6 +144,10 @@ RuntimeConfig RuntimeConfigLoader::load(const std::string& app_path,
     cfg.data_registry_port = !registry_port_env.empty()
         ? std::stoi(registry_port_env)
         : doc.value("data_registry_port", 16600);
+
+    const auto product_doc = loadJsonIfExists(cfg.product_config_path);
+    cfg.app_version = jsonString(product_doc, "version", cfg.app_version);
+    cfg.update_info = jsonString(product_doc, "update_info", {});
     return cfg;
 }
 

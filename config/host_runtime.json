@@ -1,6 +1,7 @@
 {
   "agents_config_path": "third_party/Recordlab_nodes/config/agents_config.json",
   "nodes_root": "third_party/Recordlab_nodes",
+  "product_config_path": "third_party/Recordlab_nodes/config/recordlab_product_config.jsonc",
   "echo_python_root": "third_party/echo_message_system/python",
   "data_root": "third_party/Recordlab_nodes/data",
   "logs_root": "logs",

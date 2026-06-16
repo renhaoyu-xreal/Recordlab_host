@@ -22,6 +22,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QStatusBar>
 #include <QUuid>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -255,12 +256,16 @@ MainWindow::MainWindow(std::string agents_config_path,
                        std::string node_runtime_module,
                        std::string data_registry_host,
                        int data_registry_port,
+                       std::string app_version,
+                       std::string update_info,
                        QWidget* parent)
     : QMainWindow(parent),
       agents_config_path_(std::move(agents_config_path)),
       nodes_root_(QString::fromStdString(nodes_root)),
       echo_python_root_(QString::fromStdString(echo_python_root)),
       data_root_(QString::fromStdString(data_root)),
+      app_version_(QString::fromStdString(std::move(app_version)).trimmed()),
+      update_info_(QString::fromStdString(std::move(update_info)).trimmed()),
       python_bin_(QString::fromStdString(python_bin)),
       node_runtime_module_(QString::fromStdString(node_runtime_module)),
       data_registry_host_(QString::fromStdString(data_registry_host)),
@@ -335,6 +340,7 @@ MainWindow::MainWindow(std::string agents_config_path,
     stack_->addWidget(entry_page_);
     stack_->addWidget(workspace_page_);
     setCentralWidget(stack_);
+    initializeStatusBar();
 
     connect(entry_page_, &EntryPage::agentSelected, this, [this](const QString& agent_name) {
         try {
@@ -367,6 +373,7 @@ MainWindow::MainWindow(std::string agents_config_path,
     });
 
     loadAgents();
+    showStartupMessages();
 }
 
 MainWindow::~MainWindow() {
@@ -705,6 +712,7 @@ void MainWindow::activateAgent(const QString& agent_name) {
         summary_request_id_.clear();
         summary_data_name_.clear();
         active_agent_ = agent_name;
+        updateActiveAgentStatus();
         active_agent_connected_ = false;
         if (watchdog_) {
             bool watchdog_start_device = true;
@@ -725,6 +733,44 @@ void MainWindow::activateAgent(const QString& agent_name) {
     } catch (...) {
         reportQtException(QStringLiteral("activateAgent"));
     }
+}
+
+void MainWindow::initializeStatusBar() {
+    if (app_version_.isEmpty()) {
+        app_version_ = QStringLiteral("v1.0.0");
+    }
+
+    version_label_ = new QLabel(QStringLiteral("版本：%1").arg(app_version_), this);
+    version_label_->setObjectName(QStringLiteral("app_version_status_label"));
+    version_label_->setStyleSheet(QStringLiteral(
+        "QLabel#app_version_status_label { color: #5f5649; padding: 0 8px; font-weight: 600; }"));
+
+    statusBar()->setStyleSheet(QStringLiteral(
+        "QStatusBar { background: #e8e0d0; border-top: 1px solid #d4c7af; }"));
+    statusBar()->addPermanentWidget(version_label_);
+    statusBar()->showMessage(QStringLiteral("主 Agent：未选择"));
+}
+
+void MainWindow::updateActiveAgentStatus() {
+    statusBar()->showMessage(active_agent_.trimmed().isEmpty()
+        ? QStringLiteral("主 Agent：未选择")
+        : QStringLiteral("主 Agent：%1").arg(active_agent_));
+}
+
+void MainWindow::showStartupMessages() {
+    if (update_info_.isEmpty()) {
+        return;
+    }
+    QTimer::singleShot(0, this, [this]() {
+        auto* dialog = new QMessageBox(
+            QMessageBox::Information,
+            QStringLiteral("更新信息"),
+            QStringLiteral("%1\n\n%2").arg(app_version_, update_info_),
+            QMessageBox::Ok,
+            this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose, true);
+        dialog->open();
+    });
 }
 
 void MainWindow::updateSummaryPollingForActiveAgent() {

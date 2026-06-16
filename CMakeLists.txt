@@ -107,6 +107,7 @@ foreach(test_name
   test_host_message_bus
   test_logger_context
   test_process_handle
+  test_runtime_config
   test_scripts_actuator_lifecycle
   test_sensor_queue
   test_watchdog_lifecycle

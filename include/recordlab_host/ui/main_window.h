@@ -18,6 +18,7 @@
 #include <vector>
 
 class QStackedWidget;
+class QLabel;
 
 namespace recordlab::host::ui {
 
@@ -39,6 +40,8 @@ public:
                         std::string node_runtime_module = {},
                         std::string data_registry_host = "127.0.0.1",
                         int data_registry_port = 16600,
+                        std::string app_version = {},
+                        std::string update_info = {},
                         QWidget* parent = nullptr);
     ~MainWindow() override;
 
@@ -76,12 +79,17 @@ private:
     void updateSummaryPollingForActiveAgent();
     void pollAgentSummary();
     bool handleSummaryCmdResult(const HostMessage& msg);
+    void initializeStatusBar();
+    void updateActiveAgentStatus();
+    void showStartupMessages();
 
     // ── Paths / config ─────────────────────────────────────────
     std::string agents_config_path_;
     QString nodes_root_;
     QString echo_python_root_;
     QString data_root_;
+    QString app_version_;
+    QString update_info_;
     QString python_bin_;
     QString node_runtime_module_;
     QString data_registry_host_;
@@ -108,6 +116,7 @@ private:
     QStackedWidget* stack_ = nullptr;
     EntryPage* entry_page_ = nullptr;
     WorkspacePage* workspace_page_ = nullptr;
+    QLabel* version_label_ = nullptr;
 };
 
 }  // namespace recordlab::host::ui
