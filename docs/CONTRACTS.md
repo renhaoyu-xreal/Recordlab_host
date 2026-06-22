@@ -136,6 +136,9 @@ Nebula CSV 通过 WiFi ADB pull 时可能超过 5 分钟。涉及
 必须覆盖：停止 App、等待 flush、枚举 CSV、pull 多个 CSV、校验和删除
 手机端 CSV 的总耗时。
 
+当前 Nebula 脚本约定：单次 `adb pull` timeout 为 1800 秒；脚本和 Host
+侧 `stop_record` 总 timeout 为 2100 秒。
+
 ## Logger 定位字段
 
 `Logger::log()` 支持可选结构化 context。优先使用以下字段定位错误：
