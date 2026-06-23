@@ -5,7 +5,6 @@
 文中的占位符含义：
 
 - `<phone_ip>`：手机 WiFi IP，例如 `192.168.10.68`。
-- `<serial>`：ADB 设备名，例如 `192.168.10.68:5555` 或 USB 设备号。
 - `<usb_serial>`：USB 连接时 `adb devices` 里看到的设备号。
 
 ##  自动的统一准备
@@ -15,10 +14,25 @@
 1. 手机和电脑连接到同一个 WiFi。
 2. 用 USB 线连接手机和电脑。
 3. 手机保持解锁亮屏。
-4. 如果手机弹出“是否允许 USB 调试”，选择允许。
+4. 如果手机弹出“是否允许 USB 调试”，选择允许。并要允许无线调试
 5. 等右上角变成 HEALTHY。
 6. 拔掉手机和电脑的 USB 线。
 7. 用线连接手机和眼镜。
+
+
+
+机械臂连接过程
+
+```
+cd UR_controller
+bash start_server.sh
+```
+
+打开程序，保持连接
+
+
+
+同时控制板调为远程控制
 
 
 
@@ -178,13 +192,13 @@ Send Data    app!@#trackingMode
 列出手机里的 CSV：
 
 ```bash
-adb shell 'ls -l /sdcard/3dof_data/*.csv 2>/dev/null'
+adb -s <serial> shell 'ls -l /sdcard/3dof_data/*.csv 2>/dev/null'
 ```
 
 查看行数：
 
 ```bash
-adb shell 'wc -l /sdcard/3dof_data/*.csv 2>/dev/null'
+adb -s <serial> shell 'wc -l /sdcard/3dof_data/*.csv 2>/dev/null'
 ```
 
 查看最新一行：
@@ -208,15 +222,15 @@ mkdir -p <local_dir>
 把 CSV 拉到电脑：
 
 ```bash
-adb pull /sdcard/3dof_data/<file>.csv <local_dir>/
+adb -s <serial> pull /sdcard/3dof_data/<file>.csv <local_dir>/
 ```
 
-如果有 mobile 和 air 两个 CSV，要两个都 pull 成功后再删除手机端 CSV。
+如果有 mobile 和 air 两个 CSV，要两个都 pull 成功后再删除手机端旧 CSV。
 
-删除手机端 CSV：
+删除手机端昨天和昨天以前的 CSV，当天 CSV 保留：
 
 ```bash
-adb -s <serial> shell 'rm -f /sdcard/3dof_data/*.csv'
+adb -s <serial> shell 'today=$(date +%y_%m_%d); for f in /sdcard/3dof_data/*.csv; do [ -e "$f" ] || continue; name=${f##*/}; day=$(printf "%s" "$name" | cut -c1-8); case "$day" in [0-9][0-9]_[0-9][0-9]_[0-9][0-9]) [ "$day" \< "$today" ] && rm -f "$f";; esac; done'
 ```
 
 删除前请确认电脑目录里已经能看到刚刚 pull 下来的文件。
@@ -228,14 +242,14 @@ adb -s <serial> shell 'rm -f /sdcard/3dof_data/*.csv'
 | 报错或现象 | 优先检查 |
 | --- | --- |
 | `ADB Wi-Fi device did not come online` | WiFi 是否相同、USB 调试是否允许、`adb devices` 是否有 `device`。 |
-| `No online ADB device` | 手机是否在线、授权是否已允许、`<serial>` 是否选错。 |
-| `more than one device/emulator` | 命令里加 `-s <serial>`。 |
-| `Nebula tracking mode is not 3DoF: <empty>` | BP 9898 没连上、App 没起来、IP 不对、眼镜连接异常。 |
+| `No online ADB device` | 手机是否在线、授权是否已允许。 |
+| `more than one device/emulator` | 重新连接，保证只存在一个设备或者命令里加 `-s <serial>`。 |
+| `Nebula tracking mode is not 3DoF: <empty>` | BP 9898 没连上、App 没起来、IP 不对、眼镜连接异常。（插拔一下） |
 | `等待CSV增长超时` | App 可能没开始写 CSV，先查 `/sdcard/3dof_data` 和 CSV 行数。 |
-| `stop_record 失败` 或 `pull timeout` | CSV 文件大、WiFi 慢、ADB 断开；可以按第 7 节手动 pull。 |
+| `stop_record 失败` 或 `pull timeout` | CSV 文件大、WiFi 慢、ADB 断开；可以按第6 节手动 pull。 |
 | `Host bridge command timeout` | 可能只是等待结果超时，不等于设备没执行；用 ADB、CSV、UR 实际状态确认。 |
 
-## 10. 一套最短检查命令
+## 8. 一套最短检查命令
 
 如果现场只想快速判断问题在哪里，可以按顺序执行：
 
