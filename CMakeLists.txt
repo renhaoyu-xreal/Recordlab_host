@@ -101,6 +101,7 @@ enable_testing()
 foreach(test_name
   test_agent_config_loader
   test_agent_manager_proxy_integration
+  test_camera_shared_memory_reader
   test_data_receiver_streams
   test_data_registry_server
   test_echo_topic_encoding

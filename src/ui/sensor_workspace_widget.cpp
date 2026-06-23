@@ -422,6 +422,21 @@ SensorWorkspaceWidget::SensorWorkspaceWidget(QWidget* parent) : QWidget(parent) 
         }
     });
     curve_refresh_timer_->start();
+
+    camera_preview_timer_ = new QTimer(this);
+    camera_preview_timer_->setInterval(16);
+    connect(camera_preview_timer_, &QTimer::timeout, this, [this]() {
+        try {
+            flushPendingCameraFrames();
+        } catch (const std::exception& e) {
+            common::Logger::instance().log(common::LogLevel::Error, "SensorWorkspaceWidget",
+                                           std::string("camera preview refresh failed: ") + e.what());
+        } catch (...) {
+            common::Logger::instance().log(common::LogLevel::Error, "SensorWorkspaceWidget",
+                                           "camera preview refresh failed: unknown exception");
+        }
+    });
+    camera_preview_timer_->start();
 }
 
 QListWidget* SensorWorkspaceWidget::dataSelectionList() const {
@@ -519,6 +534,9 @@ void SensorWorkspaceWidget::resetTopicData(const QString& data_name) {
     }
     if (data_name == QStringLiteral("camera_data")) {
         last_camera_shm_seq_ = {};
+        pending_camera_payload_dirty_ = {false, false};
+        pending_camera_payloads_ = {nlohmann::json::object(), nlohmann::json::object()};
+        last_camera_render_time_ = {};
         for (int i = 0; i < static_cast<int>(video_status_labels_.size()); ++i) {
             if (video_status_labels_[static_cast<std::size_t>(i)]) {
                 setVideoStatus(i, QStringLiteral("图像 %1 | 等待图像流 | -- x --").arg(i + 1), true);
@@ -941,6 +959,8 @@ void SensorWorkspaceWidget::handleCameraData(const nlohmann::json& value) {
         return;
     }
 
+    const auto now = std::chrono::steady_clock::now();
+    constexpr auto kMinCameraRenderInterval = std::chrono::milliseconds(41);
     int fallback_index = 0;
     for (const auto& [key, cam_info] : cam_data->items()) {
         if (!cam_info.is_object()) {
@@ -956,12 +976,49 @@ void SensorWorkspaceWidget::handleCameraData(const nlohmann::json& value) {
         const auto image = cam_info.find("image");
         const auto image_raw = cam_info.find("image_raw");
         if (image != cam_info.end() && image->is_object()) {
-            updateVideoFrame(camera_index, *image);
+            if (image->value("shm", false) || image->contains("shm_seq")) {
+                pending_camera_payloads_[static_cast<std::size_t>(camera_index)] = *image;
+                pending_camera_payload_dirty_[static_cast<std::size_t>(camera_index)] = true;
+                auto& last_render = last_camera_render_time_[static_cast<std::size_t>(camera_index)];
+                if (last_render.time_since_epoch().count() == 0 || now - last_render >= kMinCameraRenderInterval) {
+                    flushPendingCameraFrames();
+                }
+            } else {
+                updateVideoFrame(camera_index, *image);
+            }
         } else if (image_raw != cam_info.end() && image_raw->is_object()) {
-            updateVideoFrame(camera_index, *image_raw);
+            if (image_raw->value("shm", false) || image_raw->contains("shm_seq")) {
+                pending_camera_payloads_[static_cast<std::size_t>(camera_index)] = *image_raw;
+                pending_camera_payload_dirty_[static_cast<std::size_t>(camera_index)] = true;
+                auto& last_render = last_camera_render_time_[static_cast<std::size_t>(camera_index)];
+                if (last_render.time_since_epoch().count() == 0 || now - last_render >= kMinCameraRenderInterval) {
+                    flushPendingCameraFrames();
+                }
+            } else {
+                updateVideoFrame(camera_index, *image_raw);
+            }
         }
     }
 
+}
+
+void SensorWorkspaceWidget::flushPendingCameraFrames() {
+    const auto now = std::chrono::steady_clock::now();
+    constexpr auto kMinCameraRenderInterval = std::chrono::milliseconds(41);
+    for (int camera_index = 0; camera_index < static_cast<int>(pending_camera_payloads_.size()); ++camera_index) {
+        if (!pending_camera_payload_dirty_[static_cast<std::size_t>(camera_index)]) {
+            continue;
+        }
+        auto& last_render = last_camera_render_time_[static_cast<std::size_t>(camera_index)];
+        if (last_render.time_since_epoch().count() != 0 && now - last_render < kMinCameraRenderInterval) {
+            continue;
+        }
+        pending_camera_payload_dirty_[static_cast<std::size_t>(camera_index)] = false;
+        last_render = now;
+        updateVideoFrameFromSharedMemory(
+            camera_index,
+            pending_camera_payloads_[static_cast<std::size_t>(camera_index)]);
+    }
 }
 
 void SensorWorkspaceWidget::updateVideoFrame(int camera_index, const nlohmann::json& image_payload) {
@@ -1080,28 +1137,39 @@ void SensorWorkspaceWidget::updateVideoFrameFromSharedMemory(int camera_index, c
         return;
     }
 
-    QImage::Format image_format = QImage::Format_Invalid;
-    if (frame.format == static_cast<int>(QImage::Format_Grayscale8) || frame.bytes_per_line == frame.width) {
-        image_format = QImage::Format_Grayscale8;
-    } else if (frame.format == static_cast<int>(QImage::Format_RGB888) || frame.bytes_per_line >= frame.width * 3) {
-        image_format = QImage::Format_RGB888;
-    }
-    if (image_format == QImage::Format_Invalid) {
-        setVideoStatus(camera_index, QStringLiteral("共享内存图像格式不支持"), true);
-        return;
-    }
-    if (frame.width <= 0 || frame.height <= 0 || frame.bytes_per_line <= 0
-        || frame.data.size() < frame.bytes_per_line * frame.height) {
-        setVideoStatus(camera_index, QStringLiteral("共享内存图像数据不完整"), true);
-        return;
-    }
+    QImage image;
+    if (frame.encoding == 1) {
+        if (!image.loadFromData(
+                reinterpret_cast<const uchar*>(frame.data.constData()),
+                frame.data.size(),
+                "JPEG")) {
+            setVideoStatus(camera_index, QStringLiteral("共享内存 JPEG 解码失败"), true);
+            return;
+        }
+    } else {
+        QImage::Format image_format = QImage::Format_Invalid;
+        if (frame.format == static_cast<int>(QImage::Format_Grayscale8) || frame.bytes_per_line == frame.width) {
+            image_format = QImage::Format_Grayscale8;
+        } else if (frame.format == static_cast<int>(QImage::Format_RGB888) || frame.bytes_per_line >= frame.width * 3) {
+            image_format = QImage::Format_RGB888;
+        }
+        if (image_format == QImage::Format_Invalid) {
+            setVideoStatus(camera_index, QStringLiteral("共享内存图像格式不支持"), true);
+            return;
+        }
+        if (frame.width <= 0 || frame.height <= 0 || frame.bytes_per_line <= 0
+            || frame.data.size() < frame.bytes_per_line * frame.height) {
+            setVideoStatus(camera_index, QStringLiteral("共享内存图像数据不完整"), true);
+            return;
+        }
 
-    const QImage image(
-        reinterpret_cast<const uchar*>(frame.data.constData()),
-        frame.width,
-        frame.height,
-        frame.bytes_per_line,
-        image_format);
+        image = QImage(
+            reinterpret_cast<const uchar*>(frame.data.constData()),
+            frame.width,
+            frame.height,
+            frame.bytes_per_line,
+            image_format).copy();
+    }
     if (image.isNull()) {
         setVideoStatus(camera_index, QStringLiteral("共享内存图像解码失败"), true);
         return;
@@ -1127,6 +1195,7 @@ void SensorWorkspaceWidget::updateVideoFrameFromSharedMemory(int camera_index, c
             "camera shm render cam=" + std::to_string(camera_index)
                 + " size=" + std::to_string(frame.width) + "x" + std::to_string(frame.height)
                 + " bytes=" + std::to_string(frame.data.size())
+                + " encoded=" + std::to_string(frame.encoding)
                 + " seq=" + std::to_string(frame.seq)
                 + " render_ms=" + std::to_string(render_ms));
         last_debug_log[static_cast<std::size_t>(camera_index)] = now;

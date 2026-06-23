@@ -1,4 +1,5 @@
 build/
+.vscode/
 logs/
 dist/
 third_party/Recordlab_nodes/

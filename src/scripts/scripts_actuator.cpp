@@ -257,7 +257,7 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
 
     publishLog("运行脚本: " + resolved.toStdString(), "info", "script");
     const QString python_bin = env.value(QStringLiteral("RECORDLAB_PYTHON_BIN"), python_bin_);
-    const QString runtime = QDir(nodes_root_).filePath(QStringLiteral("scripts/runtime/run_recordlab_script.py"));
+    const QString runtime = QDir(nodes_root_).filePath(QStringLiteral("node_scripts/runtime/run_recordlab_script.py"));
     if (QFileInfo(runtime).exists()) {
         script_process_->start(python_bin, {
             runtime,
@@ -293,7 +293,7 @@ QString ScriptsActuator::resolveScriptPath(const QString& script_path) const {
     if (direct.exists()) return direct.absoluteFilePath();
     const QFileInfo in_scripts(QDir(nodes_root_).filePath(QStringLiteral("node_scripts/") + script_path));
     if (in_scripts.exists()) return in_scripts.absoluteFilePath();
-    const QFileInfo in_legacy_scripts(QDir(nodes_root_).filePath(QStringLiteral("scripts/") + script_path));
+    const QFileInfo in_legacy_scripts(QDir(nodes_root_).filePath(QStringLiteral("node_scripts/") + script_path));
     if (in_legacy_scripts.exists()) return in_legacy_scripts.absoluteFilePath();
     return script_path;
 }

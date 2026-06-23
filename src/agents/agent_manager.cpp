@@ -300,7 +300,7 @@ void AgentManager::doLocalScriptCommand(const AgentConfig& config, const std::st
         return;
     }
     const std::string script_name = params.value("script", cmd);
-    const std::string scripts_dir = config.custom_params.value("scripts_dir", std::string("scripts"));
+    const std::string scripts_dir = config.custom_params.value("scripts_dir", std::string("node_scripts"));
     std::filesystem::path script_path(script_name);
     if (script_path.is_relative()) {
         script_path = std::filesystem::path(nodes_root_) / scripts_dir / script_name;

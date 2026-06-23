@@ -80,7 +80,7 @@ AgentConfig AgentConfigLoader::loadAgent(const std::string& agent_name) const {
     cfg.watchdog_start_device = item.value("watchdog_start_device", true);
     cfg.custom_params = item.value("custom_params", nlohmann::json::object());
     if (item.contains("scripts_dir")) {
-        cfg.custom_params["scripts_dir"] = item.value("scripts_dir", std::string("scripts"));
+        cfg.custom_params["scripts_dir"] = item.value("scripts_dir", std::string("node_scripts"));
     }
     cfg.sensor_layout = resolveSharedValue(
         doc, item, "sensor_layout", "sensor_layouts", nlohmann::json::object());

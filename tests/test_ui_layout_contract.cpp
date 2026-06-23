@@ -8,6 +8,8 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QGroupBox>
+#include <QBuffer>
+#include <QColor>
 #include <QImage>
 #include <QLabel>
 #include <QListWidget>
@@ -19,10 +21,14 @@
 #include <nlohmann/json.hpp>
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <netinet/in.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <thread>
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -55,6 +61,141 @@ int freePort() {
     const int port = ntohs(addr.sin_port);
     close(fd);
     return port;
+}
+
+struct ScopedCameraShm {
+    std::string name;
+    int fd = -1;
+    void* mapping = nullptr;
+    std::size_t size = 0;
+
+    ~ScopedCameraShm() {
+        if (mapping && mapping != MAP_FAILED) {
+            munmap(mapping, size);
+        }
+        if (fd >= 0) {
+            close(fd);
+        }
+        if (!name.empty()) {
+            shm_unlink(name.c_str());
+        }
+    }
+};
+
+ScopedCameraShm createCameraShm() {
+    constexpr std::uint32_t kHeaderMagic = 0x52434d48;  // RCMH
+    constexpr int kHeaderSize = 64;
+    constexpr int kCameraCount = 2;
+    constexpr int kSlotCount = 4;
+    constexpr int kMetaSize = 64;
+    constexpr int kSlotSize = 1024;
+    constexpr std::size_t kSeqSize = kCameraCount * kSlotCount * sizeof(std::uint64_t);
+    constexpr std::size_t kTotalSize = kHeaderSize + kSeqSize + kCameraCount * kSlotCount * kSlotSize;
+    const std::string shm_name = "/recordlab_test_camera_shm_ui";
+    shm_unlink(shm_name.c_str());
+
+    ScopedCameraShm shm;
+    shm.name = shm_name;
+    shm.size = kTotalSize;
+    shm.fd = shm_open(shm.name.c_str(), O_CREAT | O_RDWR, 0600);
+    require(shm.fd >= 0, "failed to create camera shm");
+    require(ftruncate(shm.fd, static_cast<off_t>(shm.size)) == 0, "failed to resize camera shm");
+    shm.mapping = mmap(nullptr, shm.size, PROT_READ | PROT_WRITE, MAP_SHARED, shm.fd, 0);
+    require(shm.mapping != MAP_FAILED, "failed to map camera shm");
+    std::memset(shm.mapping, 0, shm.size);
+
+    auto* bytes = static_cast<unsigned char*>(shm.mapping);
+    auto write_u32 = [&](std::size_t offset, std::uint32_t value) {
+        std::memcpy(bytes + offset, &value, sizeof(value));
+    };
+    auto write_u64 = [&](std::size_t offset, std::uint64_t value) {
+        std::memcpy(bytes + offset, &value, sizeof(value));
+    };
+
+    write_u32(0, kHeaderMagic);
+    write_u32(4, 1);
+    write_u32(8, kCameraCount);
+    write_u32(12, kSlotCount);
+    write_u32(16, kSlotSize);
+    write_u32(20, kMetaSize);
+
+    const std::size_t seq_offset = kHeaderSize;
+    const std::size_t slots_offset = kHeaderSize + kSeqSize;
+    write_u64(seq_offset, 1);
+
+    const std::size_t slot_offset = slots_offset;
+    write_u32(slot_offset + 0, 2);
+    write_u32(slot_offset + 4, 2);
+    write_u32(slot_offset + 8, static_cast<std::uint32_t>(QImage::Format_Grayscale8));
+    write_u32(slot_offset + 12, 4);
+    write_u32(slot_offset + 16, 2);
+    write_u32(slot_offset + 20, 0);
+    bytes[slot_offset + kMetaSize + 0] = 1;
+    bytes[slot_offset + kMetaSize + 1] = 2;
+    bytes[slot_offset + kMetaSize + 2] = 3;
+    bytes[slot_offset + kMetaSize + 3] = 4;
+    return shm;
+}
+
+ScopedCameraShm createJpegCameraShm(std::uint64_t seq = 2) {
+    constexpr std::uint32_t kHeaderMagic = 0x52434d48;  // RCMH
+    constexpr int kHeaderSize = 64;
+    constexpr int kCameraCount = 2;
+    constexpr int kSlotCount = 4;
+    constexpr int kMetaSize = 64;
+    constexpr int kSlotSize = 4096;
+    constexpr std::size_t kSeqSize = kCameraCount * kSlotCount * sizeof(std::uint64_t);
+    constexpr std::size_t kTotalSize = kHeaderSize + kSeqSize + kCameraCount * kSlotCount * kSlotSize;
+    const std::string shm_name = "/recordlab_test_camera_shm_ui_jpeg";
+    shm_unlink(shm_name.c_str());
+
+    QImage image(2, 2, QImage::Format_RGB888);
+    image.fill(QColor(255, 64, 32));
+    QByteArray jpegBytes;
+    QBuffer jpegBuffer(&jpegBytes);
+    require(jpegBuffer.open(QIODevice::WriteOnly), "failed to open jpeg buffer");
+    require(image.save(&jpegBuffer, "JPEG", 72), "failed to encode jpeg preview");
+    jpegBuffer.close();
+
+    ScopedCameraShm shm;
+    shm.name = shm_name;
+    shm.size = kTotalSize;
+    shm.fd = shm_open(shm.name.c_str(), O_CREAT | O_RDWR, 0600);
+    require(shm.fd >= 0, "failed to create jpeg camera shm");
+    require(ftruncate(shm.fd, static_cast<off_t>(shm.size)) == 0, "failed to resize jpeg camera shm");
+    shm.mapping = mmap(nullptr, shm.size, PROT_READ | PROT_WRITE, MAP_SHARED, shm.fd, 0);
+    require(shm.mapping != MAP_FAILED, "failed to map jpeg camera shm");
+    std::memset(shm.mapping, 0, shm.size);
+
+    auto* bytes = static_cast<unsigned char*>(shm.mapping);
+    auto write_u32 = [&](std::size_t offset, std::uint32_t value) {
+        std::memcpy(bytes + offset, &value, sizeof(value));
+    };
+    auto write_u64 = [&](std::size_t offset, std::uint64_t value) {
+        std::memcpy(bytes + offset, &value, sizeof(value));
+    };
+
+    write_u32(0, kHeaderMagic);
+    write_u32(4, 1);
+    write_u32(8, kCameraCount);
+    write_u32(12, kSlotCount);
+    write_u32(16, kSlotSize);
+    write_u32(20, kMetaSize);
+
+    const std::size_t seq_offset = kHeaderSize;
+    const std::size_t slots_offset = kHeaderSize + kSeqSize;
+    const std::size_t slot_index = static_cast<std::size_t>(seq % kSlotCount);
+    write_u64(seq_offset + slot_index * sizeof(std::uint64_t), seq);
+
+    const std::size_t slot_offset = slots_offset + slot_index * kSlotSize;
+    write_u32(slot_offset + 0, 2);
+    write_u32(slot_offset + 4, 2);
+    write_u32(slot_offset + 8, static_cast<std::uint32_t>(QImage::Format_RGB888));
+    write_u32(slot_offset + 12, static_cast<std::uint32_t>(jpegBytes.size()));
+    write_u32(slot_offset + 16, 6);
+    write_u32(slot_offset + 20, 1);
+    std::memcpy(bytes + slot_offset + kMetaSize, jpegBytes.constData(), static_cast<std::size_t>(jpegBytes.size()));
+    return shm;
 }
 
 }  // namespace
@@ -227,6 +368,65 @@ int main(int argc, char** argv) {
     }
     require(saw_camera_status, "camera frame status missing");
     require(curve_group->title() == QStringLiteral("传感器数据曲线: IMU0-gyro"), "camera frames should not change selected data");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    auto shm = createCameraShm();
+    script_workspace->handleRealtimeData(QStringLiteral("camera_data"), nlohmann::json{
+        {"timestamp", 2},
+        {"cam_data", {
+            {"0", {
+                {"image", {
+                    {"width", 2},
+                    {"height", 2},
+                    {"encoding", "shm_raw"},
+                    {"shm", true},
+                    {"shm_name", shm.name.substr(1)},
+                    {"shm_seq", 1},
+                }},
+            }},
+        }},
+    }, 30.0);
+    QApplication::processEvents();
+    bool saw_shm_camera_status = false;
+    QStringList shm_camera_statuses;
+    for (const auto* label : script_workspace->findChild<QWidget*>("video_panel_1")->findChildren<QLabel*>()) {
+        shm_camera_statuses << label->text();
+        saw_shm_camera_status = saw_shm_camera_status || label->text().contains(QStringLiteral("cam 0 | 2 x 2 | shm seq 1"));
+    }
+    require(
+        saw_shm_camera_status,
+        ("shared-memory camera preview status missing: " + shm_camera_statuses.join(" | ").toStdString()));
+    require(curve_group->title() == QStringLiteral("传感器数据曲线: IMU0-gyro"), "shared-memory camera frames should not change selected data");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    auto jpeg_shm = createJpegCameraShm();
+    script_workspace->handleRealtimeData(QStringLiteral("camera_data"), nlohmann::json{
+        {"timestamp", 3},
+        {"cam_data", {
+            {"0", {
+                {"image", {
+                    {"width", 2},
+                    {"height", 2},
+                    {"encoding", "shm_jpeg"},
+                    {"encoded_format", "JPEG"},
+                    {"shm", true},
+                    {"shm_name", jpeg_shm.name.substr(1)},
+                    {"shm_seq", 2},
+                }},
+            }},
+        }},
+    }, 30.0);
+    QApplication::processEvents();
+    bool saw_jpeg_shm_status = false;
+    QStringList jpeg_shm_statuses;
+    for (const auto* label : script_workspace->findChild<QWidget*>("video_panel_1")->findChildren<QLabel*>()) {
+        jpeg_shm_statuses << label->text();
+        saw_jpeg_shm_status = saw_jpeg_shm_status || label->text().contains(QStringLiteral("cam 0 | 2 x 2 | shm seq 2"));
+    }
+    require(
+        saw_jpeg_shm_status,
+        ("shared-memory jpeg camera preview status missing: " + jpeg_shm_statuses.join(" | ").toStdString()));
+    require(curve_group->title() == QStringLiteral("传感器数据曲线: IMU0-gyro"), "shared-memory jpeg camera frames should not change selected data");
 
     workspace->configureSensorLayout(nlohmann::json{
         {"android_imu_data", {

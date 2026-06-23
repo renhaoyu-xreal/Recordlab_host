@@ -16,7 +16,7 @@ namespace {
 constexpr int kCameraCount = 2;
 constexpr int kSlotCount = 4;
 constexpr int kMetaSize = 64;
-constexpr int kSlotSize = 4 * 1024 * 1024;
+constexpr int kSlotSize = 12 * 1024 * 1024;
 constexpr std::size_t kSeqSize = kCameraCount * kSlotCount * sizeof(std::uint64_t);
 constexpr std::size_t kTotalSize = kSeqSize + kCameraCount * kSlotCount * kSlotSize;
 constexpr std::uint32_t kHeaderMagic = 0x52434d48;  // RCMH
@@ -49,14 +49,34 @@ CameraSharedMemoryReader::~CameraSharedMemoryReader() {
 
 bool CameraSharedMemoryReader::attach(const std::string& shm_name) {
     const std::string normalized = normalizeName(shm_name);
-    if (mapping_ && shm_name_ == normalized) {
-        return true;
-    }
+    if (mapping_ && shm_name_ == normalized && fd_ >= 0) {
+        int probe_fd = ::shm_open(normalized.c_str(), O_RDONLY, 0600);
+        if (probe_fd < 0) {
+            detach();
+            return false;
+        }
 
-    detach();
-    fd_ = ::shm_open(normalized.c_str(), O_RDONLY, 0600);
-    if (fd_ < 0) {
-        return false;
+        struct stat current_st {};
+        struct stat probe_st {};
+        const bool current_ok = ::fstat(fd_, &current_st) == 0;
+        const bool probe_ok = ::fstat(probe_fd, &probe_st) == 0;
+        const bool same_object = current_ok && probe_ok
+            && current_st.st_dev == probe_st.st_dev
+            && current_st.st_ino == probe_st.st_ino
+            && current_st.st_size == probe_st.st_size;
+        if (same_object) {
+            ::close(probe_fd);
+            return true;
+        }
+
+        detach();
+        fd_ = probe_fd;
+    } else {
+        detach();
+        fd_ = ::shm_open(normalized.c_str(), O_RDONLY, 0600);
+        if (fd_ < 0) {
+            return false;
+        }
     }
 
     struct stat st {};

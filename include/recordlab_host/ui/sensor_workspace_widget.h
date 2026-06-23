@@ -55,6 +55,7 @@ private:
     void requestCurveRefresh();
     void refreshSelectedCurves();
     void handleCameraData(const nlohmann::json& value);
+    void flushPendingCameraFrames();
     void updateVideoFrame(int camera_index, const nlohmann::json& image_payload);
     void updateVideoFrameFromSharedMemory(int camera_index, const nlohmann::json& image_payload);
     void setVideoStatus(int camera_index, const QString& text, bool force = false);
@@ -67,6 +68,12 @@ private:
     QString selected_data_name_;
     std::unique_ptr<recordlab::host::CameraSharedMemoryReader> camera_shm_reader_;
     std::array<std::uint64_t, 2> last_camera_shm_seq_{};
+    std::array<nlohmann::json, 2> pending_camera_payloads_{
+        nlohmann::json::object(),
+        nlohmann::json::object(),
+    };
+    std::array<bool, 2> pending_camera_payload_dirty_{{false, false}};
+    std::array<std::chrono::steady_clock::time_point, 2> last_camera_render_time_{};
     std::array<std::chrono::steady_clock::time_point, 2> last_video_status_update_{};
     std::array<QString, 2> last_video_status_text_{};
     std::array<QLabel*, 2> video_image_labels_{};
@@ -77,6 +84,7 @@ private:
     std::map<QString, QString> summary_value_blocks_;
     std::map<QString, std::array<double, 3>> smoothed_value_by_label_;
     QTimer* curve_refresh_timer_ = nullptr;
+    QTimer* camera_preview_timer_ = nullptr;
     bool curve_dirty_ = false;
     nlohmann::json sensor_layout_ = nlohmann::json::object();
     std::map<QString, QString> stream_label_by_key_;
