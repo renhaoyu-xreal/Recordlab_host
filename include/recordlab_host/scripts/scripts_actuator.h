@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 namespace recordlab::host {
 
@@ -36,9 +37,12 @@ private:
     bool handleRuntimeEvent(const QString& line);
     void handleDialogEvent(const nlohmann::json& event);
     void handleCommandRequestEvent(const nlohmann::json& event);
+    void handleWatchdogStateRequestEvent(const nlohmann::json& event);
+    void handleWatchdogEnsureRequestEvent(const nlohmann::json& event);
     void handleCreateDirectoryEvent(const nlohmann::json& event);
     void handleDialogResponse(const nlohmann::json& payload);
     void handleCommandResult(const nlohmann::json& payload);
+    void handleWatchdogStateBusEvent(const nlohmann::json& payload);
     void handleWorkflowEvent(const nlohmann::json& event);
     void sendRuntimeResponse(const nlohmann::json& response);
     void publishToUI(const std::string& type, nlohmann::json payload);
@@ -63,6 +67,7 @@ private:
     std::string current_script_path_;
     std::string current_agent_name_;
     long long current_script_pid_ = 0;
+    std::unordered_map<std::string, nlohmann::json> latest_watchdog_state_by_agent_;
 };
 
 }  // namespace recordlab::host

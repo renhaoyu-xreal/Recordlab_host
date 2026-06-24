@@ -97,6 +97,7 @@ ScriptsActuator::ScriptsActuator(HostMessageBus& bus, QString nodes_root,
       agents_config_path_(std::move(agents_config_path)),
       python_bin_(std::move(python_bin)) {
     bus_.registerConsumer(msg::SCRIPTS_ACTUATOR);
+    bus_.subscribe(msg::SCRIPTS_ACTUATOR, msg::WATCHDOG_STATE, msg::WATCHDOG);
     poll_timer_ = new QTimer(this);
     poll_timer_->setInterval(50);
     connect(poll_timer_, &QTimer::timeout, this, [this]() {
@@ -131,6 +132,8 @@ void ScriptsActuator::pollBus() {
             handleDialogResponse(m.payload);
         } else if (m.type == msg::CMD_RESULT) {
             handleCommandResult(m.payload);
+        } else if (m.type == msg::WATCHDOG_STATE) {
+            handleWatchdogStateBusEvent(m.payload);
         }
     }
 }
@@ -345,6 +348,8 @@ bool ScriptsActuator::handleRuntimeEvent(const QString& line) {
         const auto type = event.value("type", std::string{});
         if (type == "dialog") handleDialogEvent(event);
         if (type == "cmd_request") handleCommandRequestEvent(event);
+        if (type == "watchdog_state_request") handleWatchdogStateRequestEvent(event);
+        if (type == "watchdog_ensure_request") handleWatchdogEnsureRequestEvent(event);
         if (type == "create_directory") handleCreateDirectoryEvent(event);
         if (type == "workflow") handleWorkflowEvent(event);
         if (type == "required_agents") publishToUI(msg::SCRIPT_REQUIRED_AGENTS, event);
@@ -388,6 +393,63 @@ void ScriptsActuator::handleCommandRequestEvent(const nlohmann::json& event) {
     });
 }
 
+void ScriptsActuator::handleWatchdogStateRequestEvent(const nlohmann::json& event) {
+    const std::string request_id = event.value("id", event.value("request_id", std::string{}));
+    std::string agent_name = event.value("agent_name", std::string{});
+    if (agent_name.empty()) {
+        agent_name = current_agent_name_;
+    }
+
+    nlohmann::json response = nullptr;
+    if (!agent_name.empty()) {
+        const auto it = latest_watchdog_state_by_agent_.find(agent_name);
+        if (it != latest_watchdog_state_by_agent_.end()) {
+            response = it->second;
+        }
+    }
+    if (response.is_null() && !current_agent_name_.empty()) {
+        const auto it = latest_watchdog_state_by_agent_.find(current_agent_name_);
+        if (it != latest_watchdog_state_by_agent_.end()) {
+            response = it->second;
+        }
+    }
+
+    sendRuntimeResponse({
+        {"id", request_id},
+        {"request_id", request_id},
+        {"success", true},
+        {"cancelled", false},
+        {"response", response},
+    });
+}
+
+void ScriptsActuator::handleWatchdogEnsureRequestEvent(const nlohmann::json& event) {
+    const std::string request_id = event.value("id", event.value("request_id", std::string{}));
+    std::string agent_name = event.value("agent_name", std::string{});
+    if (agent_name.empty()) {
+        agent_name = current_agent_name_;
+    }
+
+    bus_.publish({
+        .request_id = request_id,
+        .source = msg::SCRIPTS_ACTUATOR,
+        .target = msg::WATCHDOG_CONTROL,
+        .type = msg::WATCHDOG_ENSURE_DEVICE,
+        .payload = {
+            {"request_id", request_id},
+            {"agent_name", agent_name},
+            {"source", std::string("script")},
+        },
+    });
+    sendRuntimeResponse({
+        {"id", request_id},
+        {"request_id", request_id},
+        {"success", true},
+        {"cancelled", false},
+        {"response", {{"requested", true}, {"agent_name", agent_name}}},
+    });
+}
+
 void ScriptsActuator::handleCreateDirectoryEvent(const nlohmann::json& event) {
     const QString path = jsonStringValue(event, "path");
     const bool ok = !path.trimmed().isEmpty() && QDir().mkpath(path);
@@ -415,6 +477,13 @@ void ScriptsActuator::handleCommandResult(const nlohmann::json& payload) {
         {"cancelled", false},
         {"response", payload},
     });
+}
+
+void ScriptsActuator::handleWatchdogStateBusEvent(const nlohmann::json& payload) {
+    const auto agent_name = payload.value("agent_name", std::string{});
+    if (!agent_name.empty()) {
+        latest_watchdog_state_by_agent_[agent_name] = payload;
+    }
 }
 
 void ScriptsActuator::handleWorkflowEvent(const nlohmann::json& event) {

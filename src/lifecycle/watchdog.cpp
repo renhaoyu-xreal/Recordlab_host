@@ -19,6 +19,7 @@ std::string makeWatchdogRequestId(const std::string& agent_name, const std::stri
 
 Watchdog::Watchdog(HostMessageBus& bus) : bus_(bus) {
     bus_.registerConsumer(msg::WATCHDOG);
+    bus_.registerConsumer(msg::WATCHDOG_CONTROL);
 }
 
 Watchdog::Watchdog(HostMessageBus& bus, std::string agent_name) : Watchdog(bus) {
@@ -112,6 +113,7 @@ void Watchdog::workerLoop() {
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog", "started");
 
     while (running_) {
+        handleControlMessages();
         if (!hasActiveAgent()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
@@ -176,6 +178,7 @@ void Watchdog::workerLoop() {
         }
         for (int i = 0; i < interval && running_; i += 100) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            handleControlMessages();
             if (estop_requested_) break;
         }
     }
@@ -183,7 +186,55 @@ void Watchdog::workerLoop() {
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog", "stopped");
 }
 
+void Watchdog::handleControlMessages() {
+    auto messages = bus_.drainFor(msg::WATCHDOG_CONTROL);
+    for (const auto& message : messages) {
+        if (message.type == msg::WATCHDOG_ENSURE_DEVICE) {
+            ensureDeviceReadyFromScript(message.payload);
+        }
+    }
+}
+
+void Watchdog::ensureDeviceReadyFromScript(const nlohmann::json& payload) {
+    const auto requested_agent = payload.value("agent_name", std::string{});
+    const auto active_agent = activeAgent();
+    if (!requested_agent.empty() && !active_agent.empty() && requested_agent != active_agent) {
+        common::Logger::instance().log(
+            common::LogLevel::Warn,
+            "Watchdog",
+            "ignoring ensure_device request for inactive agent=" + requested_agent,
+            {{"requested_agent", requested_agent}, {"active_agent", active_agent}});
+        return;
+    }
+
+    start_device_after_init_ = true;
+    failure_stop_sent_ = false;
+    const auto current = state_.load();
+    if (current == AgentHealthState::HEALTHY) {
+        start_pending_ = true;
+        last_reason_ = "script_requested_start_device";
+    } else if (current == AgentHealthState::ERROR) {
+        consecutive_failures_ = 0;
+        init_failures_ = 0;
+        last_reason_ = "script_requested_retry";
+        state_ = AgentHealthState::DISCONNECTED;
+    } else if (current == AgentHealthState::INITIALIZING) {
+        last_reason_ = "script_requested_wait_for_init";
+    } else {
+        last_reason_ = "script_requested_ensure_device";
+    }
+    publishState(state_.load());
+}
+
 AgentHealthState Watchdog::doCheck() {
+    const auto current_state = state_.load();
+    if (script_monitoring_ && current_state == AgentHealthState::HEALTHY) {
+        consecutive_failures_ = 0;
+        failure_stop_sent_ = false;
+        last_reason_ = "script_monitoring_health_checks_paused";
+        return AgentHealthState::HEALTHY;
+    }
+
     const auto agent_name = activeAgent();
     const auto monitored_agents = monitoredAgents();
     if (agent_name.empty() && monitored_agents.empty()) {
@@ -195,7 +246,10 @@ AgentHealthState Watchdog::doCheck() {
     if (!checkAgent(primary_agent, 3000, &failure_reason)) {
         consecutive_failures_++;
         last_reason_ = failure_reason;
-        if (script_monitoring_) stopScriptAndStopRecords(failure_reason);
+        if (script_monitoring_) {
+            last_reason_ = "script_monitoring_check_failed:" + failure_reason;
+            return current_state;
+        }
         return AgentHealthState::DISCONNECTED;
     }
 
@@ -205,6 +259,10 @@ AgentHealthState Watchdog::doCheck() {
         if (!checkAgent(monitored_agent, 3000, &monitored_failure)) {
             consecutive_failures_++;
             last_reason_ = monitored_failure;
+            if (script_monitoring_) {
+                last_reason_ = "script_monitoring_check_failed:" + monitored_failure;
+                return current_state;
+            }
             stopScriptAndStopRecords(monitored_failure);
             return AgentHealthState::DISCONNECTED;
         }
@@ -212,12 +270,12 @@ AgentHealthState Watchdog::doCheck() {
 
     consecutive_failures_ = 0;
     failure_stop_sent_ = false;
-    if (state_.load() == AgentHealthState::DISCONNECTED) {
+    if (current_state == AgentHealthState::DISCONNECTED) {
         init_failures_ = 0;
         last_reason_ = "check_succeeded";
         return AgentHealthState::INITIALIZING;
     }
-    if (state_.load() == AgentHealthState::ERROR) {
+    if (current_state == AgentHealthState::ERROR) {
         last_reason_ = "error_check_still_succeeds";
         return AgentHealthState::ERROR;
     }

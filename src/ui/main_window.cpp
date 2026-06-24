@@ -30,6 +30,7 @@
 #include <exception>
 #include <cstdlib>
 #include <algorithm>
+#include <unordered_set>
 
 namespace recordlab::host::ui {
 
@@ -125,6 +126,33 @@ bool extractSummaryPollConfig(const nlohmann::json& sensor_layout,
         return !summary_data_name.trimmed().isEmpty();
     }
     return false;
+}
+
+std::vector<std::string> filterScriptMonitoringAgents(
+    const std::vector<std::string>& agent_names,
+    AgentManager* agent_manager) {
+    std::vector<std::string> filtered;
+    std::unordered_set<std::string> seen;
+    for (const auto& agent_name : agent_names) {
+        if (agent_name.empty() || seen.count(agent_name) > 0) {
+            continue;
+        }
+        bool monitorable = true;
+        if (agent_manager) {
+            try {
+                const auto config = agent_manager->loadAgentConfig(agent_name);
+                monitorable = config.process_type != "local_scripts";
+            } catch (...) {
+                monitorable = false;
+            }
+        }
+        if (!monitorable) {
+            continue;
+        }
+        seen.insert(agent_name);
+        filtered.push_back(agent_name);
+    }
+    return filtered;
 }
 
 QString replaceTemplateVars(QString text, const nlohmann::json& vars) {
@@ -678,11 +706,13 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
     if (m.type == msg::SCRIPT_REQUIRED_AGENTS) {
         pending_script_agents_.clear();
         script_monitoring_started_ = false;
+        std::vector<std::string> requested_agents;
         if (m.payload.contains("agent_names") && m.payload["agent_names"].is_array()) {
             for (const auto& item : m.payload["agent_names"]) {
-                if (item.is_string()) pending_script_agents_.push_back(item.get<std::string>());
+                if (item.is_string()) requested_agents.push_back(item.get<std::string>());
             }
         }
+        pending_script_agents_ = filterScriptMonitoringAgents(requested_agents, agent_manager_.get());
         return;
     }
     if (m.type == msg::SCRIPT_WORKFLOW) {

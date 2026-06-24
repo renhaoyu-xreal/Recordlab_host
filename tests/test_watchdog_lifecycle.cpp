@@ -175,7 +175,7 @@ int main() {
         Watchdog watchdog(bus);
         watchdog.start();
         watchdog.setActiveAgent("primary");
-        watchdog.setMonitoredAgents({"primary", "remote"}, true);
+        watchdog.setMonitoredAgents({"primary", "remote"}, false);
 
         auto primary_check = waitForMatching(bus, msg::AGENT_MANAGER, [](const HostMessage& item) {
             return item.type == msg::CMD_REQUEST &&
@@ -233,6 +233,123 @@ int main() {
         }
         assert(saw_primary_stop_record);
         assert(saw_remote_stop_record);
+        watchdog.stop();
+    }
+
+    {
+        HostMessageBus bus;
+        bus.registerConsumer(msg::AGENT_MANAGER);
+        bus.registerConsumer(msg::SCRIPTS_ACTUATOR);
+        bus.registerConsumer(msg::UI);
+        Watchdog watchdog(bus);
+        watchdog.start();
+        watchdog.setActiveAgent("primary", false);
+
+        auto check = waitForMatching(bus, msg::AGENT_MANAGER, [](const HostMessage& item) {
+            return item.type == msg::CMD_REQUEST &&
+                   item.payload.value("agent_name", std::string{}) == "primary" &&
+                   item.payload.value("cmd", std::string{}) == "check";
+        });
+        bus.publish({
+            .request_id = check.request_id,
+            .source = msg::AGENT_MANAGER,
+            .target = msg::WATCHDOG,
+            .type = msg::CMD_RESULT,
+            .payload = {
+                {"request_id", check.request_id},
+                {"agent_name", "primary"},
+                {"cmd", "check"},
+                {"success", true},
+                {"message", "ok"},
+            },
+        });
+
+        auto init = waitForType(bus, msg::AGENT_MANAGER, msg::INIT_DEVICE);
+        assert(init.payload.value("agent_name", "") == "primary");
+        bus.publish({
+            .request_id = init.request_id,
+            .source = msg::AGENT_MANAGER,
+            .target = msg::WATCHDOG,
+            .type = msg::CMD_RESULT,
+            .payload = {
+                {"request_id", init.request_id},
+                {"agent_name", "primary"},
+                {"cmd", "init_device"},
+                {"success", true},
+                {"message", "ready"},
+            },
+        });
+
+        bool saw_healthy = false;
+        const auto healthy_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < healthy_deadline && !saw_healthy) {
+            auto item = bus.waitFor(msg::UI, 100);
+            saw_healthy = item && item->type == msg::WATCHDOG_STATE &&
+                          item->payload.value("state", "") == "HEALTHY";
+        }
+        assert(saw_healthy);
+
+        watchdog.setMonitoredAgents({"primary", "remote"}, true);
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto stop = bus.waitFor(msg::SCRIPTS_ACTUATOR, 100);
+            assert(!stop.has_value());
+            auto request = bus.waitFor(msg::AGENT_MANAGER, 100);
+            if (!request) {
+                continue;
+            }
+            assert(request->type != msg::CMD_REQUEST ||
+                   request->payload.value("agent_name", std::string{}) != "remote" ||
+                   request->payload.value("cmd", std::string{}) != "check");
+        }
+
+        watchdog.stop();
+    }
+
+    {
+        HostMessageBus bus;
+        bus.registerConsumer(msg::AGENT_MANAGER);
+        bus.registerConsumer(msg::UI);
+        Watchdog watchdog(bus);
+        watchdog.start();
+        watchdog.setActiveAgent("agent", false);
+
+        auto check = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
+        assert(check.payload.value("cmd", "") == "check");
+        publishResult(bus, "check", true);
+
+        auto init = waitForType(bus, msg::AGENT_MANAGER, msg::INIT_DEVICE);
+        assert(init.payload.value("agent_name", "") == "agent");
+        publishResult(bus, "init_device", true);
+
+        bool saw_healthy = false;
+        const auto healthy_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < healthy_deadline && !saw_healthy) {
+            auto item = bus.waitFor(msg::UI, 100);
+            saw_healthy = item && item->type == msg::WATCHDOG_STATE &&
+                          item->payload.value("state", "") == "HEALTHY";
+        }
+        assert(saw_healthy);
+
+        bus.publish({
+            .source = msg::SCRIPTS_ACTUATOR,
+            .target = msg::WATCHDOG_CONTROL,
+            .type = msg::WATCHDOG_ENSURE_DEVICE,
+            .payload = {
+                {"request_id", "wd-script-1"},
+                {"agent_name", "agent"},
+                {"source", "script"},
+            },
+        });
+
+        auto start = waitForMatching(bus, msg::AGENT_MANAGER, [](const HostMessage& item) {
+            return item.type == msg::CMD_REQUEST &&
+                   item.payload.value("agent_name", std::string{}) == "agent" &&
+                   item.payload.value("cmd", std::string{}) == "start_device";
+        });
+        assert(start.payload.value("silent", false) == true);
+        publishResult(bus, "start_device", true);
         watchdog.stop();
     }
 

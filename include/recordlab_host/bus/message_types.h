@@ -8,6 +8,7 @@ constexpr const char* UI              = "ui";
 constexpr const char* AGENT_MANAGER   = "agent_manager";
 constexpr const char* SCRIPTS_ACTUATOR = "scripts_actuator";
 constexpr const char* WATCHDOG        = "watchdog";
+constexpr const char* WATCHDOG_CONTROL = "watchdog_control";
 constexpr const char* DATA_RECEIVER   = "data_receiver";
 
 // ── UI / lifecycle → AgentManager ──────────────────────────────
@@ -27,6 +28,7 @@ constexpr const char* ESTOP           = "estop";              // payload: {agent
 // ── AgentManager → UI ──────────────────────────────────────────
 constexpr const char* AGENT_ACTIVATED = "agent_activated";   // payload: {agent_name, success, message}
 constexpr const char* WATCHDOG_STATE  = "watchdog_state";    // payload: {agent_name, state, reason, consecutive_failures}
+constexpr const char* WATCHDOG_ENSURE_DEVICE = "watchdog.ensure_device"; // payload: {request_id, agent_name, source}
 constexpr const char* LOG_ENTRY       = "log_entry";         // payload: {message, level, log_type}
 constexpr const char* USER_NOTIFICATION = "user_notification"; // payload: {title, message, severity}
 constexpr const char* UI_DIALOG_REQUEST = "ui.dialog.request";  // payload: {dialog_id,kind,title,message,...}

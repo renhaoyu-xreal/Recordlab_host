@@ -54,6 +54,8 @@ public:
 
 private:
     void workerLoop();
+    void handleControlMessages();
+    void ensureDeviceReadyFromScript(const nlohmann::json& payload);
     AgentHealthState doCheck();
     AgentHealthState doInitDevice();
     AgentHealthState doStartDevice();
