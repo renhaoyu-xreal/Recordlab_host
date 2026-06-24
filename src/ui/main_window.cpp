@@ -16,12 +16,12 @@
 #include <QDir>
 #include <QFormLayout>
 #include <QFont>
-#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSettings>
 #include <QStatusBar>
 #include <QUuid>
 #include <QStackedWidget>
@@ -151,6 +151,99 @@ QString jsonToQString(const nlohmann::json& value, const QString& fallback = {})
     return fallback;
 }
 
+constexpr int kFormHistoryLimit = 5;
+
+QString historyStoreKeyPart(QString value) {
+    value = value.trimmed();
+    if (value.isEmpty()) value = QStringLiteral("default");
+    return QString::fromLatin1(
+        value.toUtf8().toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+}
+
+QSettings makeFormHistorySettings() {
+    return QSettings(QSettings::IniFormat, QSettings::UserScope,
+                     QStringLiteral("RecordLab"), QStringLiteral("RecordLabHost"));
+}
+
+QString dialogHistoryScope(const QString& kind,
+                           const QString& title,
+                           const QString& message,
+                           const nlohmann::json& payload) {
+    const auto custom_it = payload.find("history_key");
+    if (custom_it != payload.end()) {
+        const QString custom = jsonToQString(*custom_it).trimmed();
+        if (!custom.isEmpty()) return custom;
+    }
+    return QStringLiteral("%1|%2|%3").arg(kind, title.trimmed(), message.trimmed());
+}
+
+QString fieldHistoryScope(const QString& dialog_scope,
+                          const std::string& field_name,
+                          const nlohmann::json& field = nlohmann::json::object()) {
+    const auto custom_it = field.find("history_key");
+    if (custom_it != field.end()) {
+        const QString custom = jsonToQString(*custom_it).trimmed();
+        if (!custom.isEmpty()) return custom;
+    }
+    return dialog_scope + QStringLiteral("|") + QString::fromStdString(field_name);
+}
+
+QStringList loadFormHistory(const QString& history_scope) {
+    QSettings settings = makeFormHistorySettings();
+    settings.beginGroup(QStringLiteral("form_history"));
+    const QStringList values = settings.value(historyStoreKeyPart(history_scope)).toStringList();
+    settings.endGroup();
+    return values;
+}
+
+void saveFormHistory(const QString& history_scope, QString value) {
+    value = value.trimmed();
+    if (value.isEmpty()) return;
+    QStringList values = loadFormHistory(history_scope);
+    values.removeAll(value);
+    values.prepend(value);
+    while (values.size() > kFormHistoryLimit) values.removeLast();
+    QSettings settings = makeFormHistorySettings();
+    settings.beginGroup(QStringLiteral("form_history"));
+    settings.setValue(historyStoreKeyPart(history_scope), values);
+    settings.endGroup();
+}
+
+QStringList mergeHistoryAndChoices(const QStringList& history_values,
+                                   const QStringList& choice_values,
+                                   const QString& fallback_value) {
+    QStringList merged;
+    auto append_unique = [&merged](const QString& value) {
+        if (!value.isEmpty() && !merged.contains(value)) merged.append(value);
+    };
+    for (const auto& value : history_values) append_unique(value);
+    append_unique(fallback_value);
+    for (const auto& value : choice_values) append_unique(value);
+    return merged;
+}
+
+QComboBox* createHistoryComboBox(QWidget* parent,
+                                 const QString& history_scope,
+                                 const QString& default_value,
+                                 const QStringList& choices,
+                                 bool has_choices) {
+    auto* combo = new QComboBox(parent);
+    combo->setEditable(!has_choices);
+    combo->setInsertPolicy(QComboBox::NoInsert);
+    const QStringList history_values = loadFormHistory(history_scope);
+    const QString effective_default = !history_values.isEmpty() ? history_values.front() : default_value;
+    combo->addItems(mergeHistoryAndChoices(history_values, choices, effective_default));
+    if (combo->isEditable()) {
+        combo->setCurrentText(effective_default);
+        if (auto* editor = combo->lineEdit()) editor->setClearButtonEnabled(true);
+    } else if (const int index = combo->findText(effective_default); index >= 0) {
+        combo->setCurrentIndex(index);
+    } else if (combo->count() > 0) {
+        combo->setCurrentIndex(0);
+    }
+    return combo;
+}
+
 bool jsonBoolValue(const nlohmann::json& object, const char* key, bool fallback = false) {
     if (!object.is_object()) return fallback;
     const auto it = object.find(key);
@@ -170,6 +263,7 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
                                          const QString& title,
                                          const QString& message,
                                          const nlohmann::json& fields,
+                                         const QString& dialog_history_scope,
                                          bool* accepted) {
     QDialog dialog(parent);
     dialog.setWindowTitle(title);
@@ -182,6 +276,7 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
 
     auto* form = new QFormLayout();
     std::vector<std::pair<std::string, QWidget*>> widgets;
+    std::vector<std::pair<QString, QWidget*>> history_widgets;
     if (fields.is_array()) {
         for (const auto& field : fields) {
             if (!field.is_object()) continue;
@@ -191,19 +286,18 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
             const QString default_value = field.contains("default")
                 ? jsonToQString(field["default"])
                 : QString{};
+            const QString history_scope = fieldHistoryScope(dialog_history_scope, name, field);
             QWidget* editor = nullptr;
             const auto choices_it = field.find("choices");
             if (choices_it != field.end() && choices_it->is_array()) {
-                auto* combo = new QComboBox(&dialog);
+                QStringList choices;
                 for (const auto& choice : *choices_it) {
-                    combo->addItem(jsonToQString(choice));
+                    choices.append(jsonToQString(choice));
                 }
-                const int index = combo->findText(default_value);
-                if (index >= 0) combo->setCurrentIndex(index);
+                auto* combo = createHistoryComboBox(&dialog, history_scope, default_value, choices, true);
                 editor = combo;
             } else {
-                auto* line_edit = new QLineEdit(default_value, &dialog);
-                editor = line_edit;
+                editor = createHistoryComboBox(&dialog, history_scope, default_value, {}, false);
             }
             const int font_size_pt = field.value("font_size_pt", 0);
             if (font_size_pt > 0) {
@@ -211,6 +305,9 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
                 editor_font.setPointSize(font_size_pt);
                 editor->setFont(editor_font);
                 editor->setMinimumHeight(font_size_pt * 2);
+                if (auto* combo = qobject_cast<QComboBox*>(editor)) {
+                    if (auto* line_edit = combo->lineEdit()) line_edit->setFont(editor_font);
+                }
             }
             const int min_width = field.value("min_width", 0);
             if (min_width > 0) editor->setMinimumWidth(min_width);
@@ -223,6 +320,7 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
             }
             form->addRow(label_widget, editor);
             widgets.emplace_back(name, editor);
+            history_widgets.emplace_back(history_scope, editor);
         }
     }
     layout->addLayout(form);
@@ -239,11 +337,46 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
     for (const auto& [name, widget] : widgets) {
         if (auto* combo = qobject_cast<QComboBox*>(widget)) {
             result[name] = combo->currentText().toStdString();
-        } else if (auto* line_edit = qobject_cast<QLineEdit*>(widget)) {
-            result[name] = line_edit->text().toStdString();
+        }
+    }
+    for (const auto& [history_scope, widget] : history_widgets) {
+        if (auto* combo = qobject_cast<QComboBox*>(widget)) {
+            saveFormHistory(history_scope, combo->currentText());
         }
     }
     return result;
+}
+
+QString showSingleFieldInputDialog(QWidget* parent,
+                                   const QString& title,
+                                   const QString& message,
+                                   const QString& default_value,
+                                   const QString& history_scope,
+                                   bool* accepted) {
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+    auto* layout = new QVBoxLayout(&dialog);
+    if (!message.trimmed().isEmpty()) {
+        auto* message_label = new QLabel(message, &dialog);
+        message_label->setWordWrap(true);
+        layout->addWidget(message_label);
+    }
+
+    auto* combo = createHistoryComboBox(&dialog, history_scope, default_value, {}, false);
+    combo->setMinimumWidth(360);
+    layout->addWidget(combo);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    const bool ok = dialog.exec() == QDialog::Accepted;
+    if (accepted) *accepted = ok;
+    if (!ok) return {};
+    const QString value = combo->currentText();
+    saveFormHistory(history_scope, value);
+    return value;
 }
 
 }  // namespace
@@ -668,6 +801,7 @@ void MainWindow::handleDialogRequest(const HostMessage& m) {
     const QString kind = QString::fromStdString(m.payload.value("kind", std::string("info")));
     const QString title = QString::fromStdString(m.payload.value("title", std::string("RecordLab")));
     const QString message = QString::fromStdString(m.payload.value("message", std::string{}));
+    const QString history_scope = dialogHistoryScope(kind, title, message, m.payload);
     nlohmann::json response = {
         {"dialog_id", dialog_id.toStdString()},
         {"id", dialog_id.toStdString()},
@@ -678,14 +812,20 @@ void MainWindow::handleDialogRequest(const HostMessage& m) {
         response["response"] = QMessageBox::question(this, title, message, QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::Yes;
     } else if (kind == QStringLiteral("input")) {
         bool ok = false;
-        const QString value = QInputDialog::getText(this, title, message, QLineEdit::Normal,
-                                                    QString::fromStdString(m.payload.value("default", std::string{})), &ok);
+        const QString value = showSingleFieldInputDialog(
+            this,
+            title,
+            message,
+            QString::fromStdString(m.payload.value("default", std::string{})),
+            history_scope,
+            &ok);
         response["cancelled"] = !ok;
         response["response"] = value.toStdString();
     } else if (kind == QStringLiteral("multi_field_input")) {
         bool ok = false;
         response["response"] = showMultiFieldInputDialog(this, title, message,
                                                          m.payload.value("fields", nlohmann::json::array()),
+                                                         history_scope,
                                                          &ok);
         response["cancelled"] = !ok;
     } else {
