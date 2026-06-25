@@ -98,6 +98,7 @@ ScriptsActuator::ScriptsActuator(HostMessageBus& bus, QString nodes_root,
       python_bin_(std::move(python_bin)) {
     bus_.registerConsumer(msg::SCRIPTS_ACTUATOR);
     bus_.subscribe(msg::SCRIPTS_ACTUATOR, msg::WATCHDOG_STATE, msg::WATCHDOG);
+    bus_.subscribe(msg::SCRIPTS_ACTUATOR, msg::NODE_COOKIES, "data_receiver");
     poll_timer_ = new QTimer(this);
     poll_timer_->setInterval(50);
     connect(poll_timer_, &QTimer::timeout, this, [this]() {
@@ -134,6 +135,22 @@ void ScriptsActuator::pollBus() {
             handleCommandResult(m.payload);
         } else if (m.type == msg::WATCHDOG_STATE) {
             handleWatchdogStateBusEvent(m.payload);
+        } else if (m.type == msg::NODE_COOKIES) {
+            latest_node_cookie_values_ = nlohmann::json::object();
+            const auto items = m.payload.value("cookies", nlohmann::json::array());
+            if (items.is_array()) {
+                for (const auto& item : items) {
+                    if (!item.is_object()) {
+                        continue;
+                    }
+                    const auto key_it = item.find("key");
+                    const auto value_it = item.find("value");
+                    if (key_it == item.end() || !key_it->is_string() || value_it == item.end()) {
+                        continue;
+                    }
+                    latest_node_cookie_values_[key_it->get<std::string>()] = *value_it;
+                }
+            }
         }
     }
 }
@@ -348,6 +365,7 @@ bool ScriptsActuator::handleRuntimeEvent(const QString& line) {
         const auto type = event.value("type", std::string{});
         if (type == "dialog") handleDialogEvent(event);
         if (type == "cmd_request") handleCommandRequestEvent(event);
+        if (type == "host_state_request") handleHostStateRequestEvent(event);
         if (type == "watchdog_state_request") handleWatchdogStateRequestEvent(event);
         if (type == "watchdog_ensure_request") handleWatchdogEnsureRequestEvent(event);
         if (type == "create_directory") handleCreateDirectoryEvent(event);
@@ -390,6 +408,22 @@ void ScriptsActuator::handleCommandRequestEvent(const nlohmann::json& event) {
             {"silent", event.value("silent", true)},
             {"timeout_ms", timeout_ms},
         },
+    });
+}
+
+void ScriptsActuator::handleHostStateRequestEvent(const nlohmann::json& event) {
+    const std::string request_id = event.value("id", event.value("request_id", std::string{}));
+    const std::string state_key = event.value("state_key", std::string{});
+    nlohmann::json response = nullptr;
+    if (state_key == "node_cookie") {
+        response = latest_node_cookie_values_;
+    }
+    sendRuntimeResponse({
+        {"id", request_id},
+        {"request_id", request_id},
+        {"success", true},
+        {"cancelled", false},
+        {"response", response},
     });
 }
 

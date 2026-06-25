@@ -9,11 +9,13 @@
 
 #include <QMainWindow>
 #include <QDateTime>
+#include <QPointer>
 #include <QStringList>
 #include <QTimer>
 #include <QPair>
 
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
@@ -82,6 +84,8 @@ private:
     void initializeStatusBar();
     void updateActiveAgentStatus();
     void showStartupMessages();
+    void updateActiveCookieBoundDialog();
+    void clearActiveCookieBoundDialog();
 
     // ── Paths / config ─────────────────────────────────────────
     std::string agents_config_path_;
@@ -117,6 +121,11 @@ private:
     EntryPage* entry_page_ = nullptr;
     WorkspacePage* workspace_page_ = nullptr;
     QLabel* version_label_ = nullptr;
+    nlohmann::json latest_node_cookies_ = nlohmann::json::object();
+    QPointer<QLabel> active_cookie_dialog_label_;
+    QString active_cookie_dialog_base_message_;
+    QString active_cookie_dialog_agent_name_;
+    QString active_cookie_dialog_card_style_;
 };
 
 }  // namespace recordlab::host::ui

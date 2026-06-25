@@ -17,6 +17,7 @@
 #include <QFormLayout>
 #include <QFont>
 #include <QLabel>
+#include <QPointer>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
@@ -179,6 +180,109 @@ QString jsonToQString(const nlohmann::json& value, const QString& fallback = {})
     return fallback;
 }
 
+struct LiveCookieDialogBinding {
+    bool enabled = false;
+    QString base_message;
+    QString agent_name;
+    QString card_style;
+};
+
+QString cookieValueFromPayload(const nlohmann::json& cookies,
+                               std::initializer_list<const char*> keys) {
+    const nlohmann::json items = cookies.is_object()
+        ? cookies.value("cookies", nlohmann::json::array())
+        : cookies;
+    if (!items.is_array()) {
+        return {};
+    }
+    for (const auto* key : keys) {
+        for (const auto& item : items) {
+            if (!item.is_object()) {
+                continue;
+            }
+            if (item.value("key", std::string{}) != key) {
+                continue;
+            }
+            const auto value_it = item.find("value");
+            if (value_it == item.end() || value_it->is_null()) {
+                continue;
+            }
+            const QString value = jsonToQString(*value_it).trimmed();
+            if (!value.isEmpty()) {
+                return value;
+            }
+        }
+    }
+    return {};
+}
+
+LiveCookieDialogBinding liveCookieDialogBindingFromPayload(const nlohmann::json& payload,
+                                                           const QString& fallback_message) {
+    LiveCookieDialogBinding binding;
+    if (!payload.is_object()) {
+        return binding;
+    }
+    const auto it = payload.find("live_cookie_card");
+    if (it == payload.end() || !it->is_object()) {
+        return binding;
+    }
+    const auto& card = *it;
+    binding.enabled = true;
+    if (const auto base_it = card.find("base_message"); base_it != card.end()) {
+        binding.base_message = jsonToQString(*base_it, fallback_message).trimmed();
+    } else {
+        binding.base_message = QString::fromStdString(payload.value("message", std::string{})).trimmed();
+    }
+    if (binding.base_message.isEmpty()) {
+        binding.base_message = fallback_message.trimmed();
+    }
+    if (const auto agent_it = card.find("agent_name"); agent_it != card.end()) {
+        binding.agent_name = jsonToQString(*agent_it).trimmed();
+    }
+    if (const auto style_it = card.find("card_style"); style_it != card.end()) {
+        binding.card_style = jsonToQString(*style_it).trimmed();
+    }
+    if (binding.card_style.isEmpty()) {
+        binding.card_style = QStringLiteral(
+            "background-color:#FFFDF2;border:1px solid #C8B36A;padding:8px;");
+    }
+    return binding;
+}
+
+QString renderLiveCookieDialogMessage(const LiveCookieDialogBinding& binding,
+                                      const nlohmann::json& cookies) {
+    const QString device_id = cookieValueFromPayload(
+        cookies, {"id", "product_id", "pid", "model", "device_model", "model_id"});
+    const QString device_name = cookieValueFromPayload(
+        cookies, {"name", "display_name", "device_name"});
+    const QString device_fsn = cookieValueFromPayload(
+        cookies, {"FSN", "fsn", "SN", "sn", "glasses_fsn"});
+
+    const QStringList info_lines = {
+        QStringLiteral("当前 Agent：%1").arg(binding.agent_name.trimmed().isEmpty()
+            ? QStringLiteral("--")
+            : binding.agent_name.trimmed()),
+        QStringLiteral("眼镜ID：%1").arg(device_id.trimmed().isEmpty()
+            ? QStringLiteral("--")
+            : device_id.trimmed()),
+        QStringLiteral("眼镜名称：%1").arg(device_name.trimmed().isEmpty()
+            ? QStringLiteral("--")
+            : device_name.trimmed()),
+        QStringLiteral("眼镜 FSN：%1").arg(device_fsn.trimmed().isEmpty()
+            ? QStringLiteral("还在获取fsn，请等待")
+            : device_fsn.trimmed()),
+    };
+
+    QString message = binding.base_message.trimmed();
+    if (!message.isEmpty()) {
+        message += QStringLiteral("<br/><br/>");
+    }
+    message += QStringLiteral("<div style=\"%1\">%2</div>")
+        .arg(binding.card_style, info_lines.join(QStringLiteral("<br/>")).toHtmlEscaped().replace(
+            QStringLiteral("&lt;br/&gt;"), QStringLiteral("<br/>")));
+    return message;
+}
+
 constexpr int kFormHistoryLimit = 5;
 
 QString historyStoreKeyPart(QString value) {
@@ -292,14 +396,21 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
                                          const QString& message,
                                          const nlohmann::json& fields,
                                          const QString& dialog_history_scope,
+                                         const std::function<void(QLabel*)>& message_label_ready,
+                                         const std::function<void()>& dialog_finished,
                                          bool* accepted) {
     QDialog dialog(parent);
     dialog.setWindowTitle(title);
     auto* layout = new QVBoxLayout(&dialog);
+    QLabel* message_label = nullptr;
     if (!message.trimmed().isEmpty()) {
-        auto* message_label = new QLabel(message, &dialog);
+        message_label = new QLabel(message, &dialog);
+        message_label->setTextFormat(Qt::RichText);
         message_label->setWordWrap(true);
         layout->addWidget(message_label);
+    }
+    if (message_label_ready) {
+        message_label_ready(message_label);
     }
 
     auto* form = new QFormLayout();
@@ -362,6 +473,9 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
     dialog.resize(static_cast<int>(dialog_size.width() * 1.5), dialog_size.height());
 
     const bool ok = dialog.exec() == QDialog::Accepted;
+    if (dialog_finished) {
+        dialog_finished();
+    }
     if (accepted) *accepted = ok;
     nlohmann::json result = nlohmann::json::object();
     if (!ok) return result;
@@ -606,9 +720,11 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         return;
     }
     if (m.type == msg::NODE_COOKIES) {
+        latest_node_cookies_ = m.payload;
         if (workspace_page_ && workspace_page_->dataPage()) {
             workspace_page_->dataPage()->setCookies(m.payload);
         }
+        updateActiveCookieBoundDialog();
         return;
     }
 
@@ -790,7 +906,7 @@ void MainWindow::applyUiBindings(const std::string& topic, const nlohmann::json&
         if (!field.empty() && value.is_object()) {
             const auto it = value.find(field);
             if (it != value.end() && it->is_number()) {
-                const double converted = it->get<double>() * scale;
+                const double converted = std::max(0.0, it->get<double>() * scale);
                 if (signal == "record_timer") emit recordTimerChanged(converted);
                 if (signal == "time_delay") emit timeDelayChanged(converted);
                 return;
@@ -798,9 +914,9 @@ void MainWindow::applyUiBindings(const std::string& topic, const nlohmann::json&
         }
     }
     if (topic == "record_timer" && value.is_object()) {
-        emit recordTimerChanged(value.value("duration_ns", 0.0) / 1e9);
+        emit recordTimerChanged(std::max(0.0, value.value("duration_ns", 0.0) / 1e9));
     } else if (topic == "time_delay" && value.is_object()) {
-        emit timeDelayChanged(value.value("time_delay_ns", 0.0) / 1e6);
+        emit timeDelayChanged(std::max(0.0, value.value("time_delay_ns", 0.0) / 1e6));
     }
 }
 
@@ -856,13 +972,50 @@ void MainWindow::handleDialogRequest(const HostMessage& m) {
         response["response"] = value.toStdString();
     } else if (kind == QStringLiteral("multi_field_input")) {
         bool ok = false;
-        response["response"] = showMultiFieldInputDialog(this, title, message,
-                                                         m.payload.value("fields", nlohmann::json::array()),
-                                                         history_scope,
-                                                         &ok);
+        const LiveCookieDialogBinding binding = liveCookieDialogBindingFromPayload(m.payload, message);
+        const QString rendered_message = binding.enabled
+            ? renderLiveCookieDialogMessage(binding, latest_node_cookies_)
+            : message;
+        response["response"] = showMultiFieldInputDialog(
+            this,
+            title,
+            rendered_message,
+            m.payload.value("fields", nlohmann::json::array()),
+            history_scope,
+            [this, binding](QLabel* label) {
+                active_cookie_dialog_label_ = label;
+                active_cookie_dialog_base_message_ = binding.base_message;
+                active_cookie_dialog_agent_name_ = binding.agent_name;
+                active_cookie_dialog_card_style_ = binding.card_style;
+                updateActiveCookieBoundDialog();
+            },
+            [this]() {
+                clearActiveCookieBoundDialog();
+            },
+            &ok);
         response["cancelled"] = !ok;
     } else {
-        if (kind == QStringLiteral("error")) QMessageBox::critical(this, title, message);
+        int timeout_ms = 0;
+        const auto timeout_it = m.payload.find("timeout_ms");
+        if (timeout_it != m.payload.end() && timeout_it->is_number()) {
+            timeout_ms = static_cast<int>(timeout_it->get<double>());
+        }
+        if (timeout_ms > 0) {
+            QMessageBox box(this);
+            box.setWindowTitle(title);
+            box.setText(message);
+            box.setStandardButtons(QMessageBox::Ok);
+            box.setTextFormat(Qt::PlainText);
+            if (kind == QStringLiteral("error")) {
+                box.setIcon(QMessageBox::Critical);
+            } else if (kind == QStringLiteral("warning")) {
+                box.setIcon(QMessageBox::Warning);
+            } else {
+                box.setIcon(QMessageBox::Information);
+            }
+            QTimer::singleShot(timeout_ms, &box, &QDialog::accept);
+            box.exec();
+        } else if (kind == QStringLiteral("error")) QMessageBox::critical(this, title, message);
         else if (kind == QStringLiteral("warning")) QMessageBox::warning(this, title, message);
         else QMessageBox::information(this, title, message);
         response["response"] = true;
@@ -944,6 +1097,29 @@ void MainWindow::showStartupMessages() {
         dialog->setAttribute(Qt::WA_DeleteOnClose, true);
         dialog->open();
     });
+}
+
+void MainWindow::updateActiveCookieBoundDialog() {
+    if (active_cookie_dialog_label_.isNull()
+        || active_cookie_dialog_card_style_.trimmed().isEmpty()) {
+        return;
+    }
+
+    const LiveCookieDialogBinding binding{
+        true,
+        active_cookie_dialog_base_message_,
+        active_cookie_dialog_agent_name_,
+        active_cookie_dialog_card_style_,
+    };
+    active_cookie_dialog_label_->setTextFormat(Qt::RichText);
+    active_cookie_dialog_label_->setText(renderLiveCookieDialogMessage(binding, latest_node_cookies_));
+}
+
+void MainWindow::clearActiveCookieBoundDialog() {
+    active_cookie_dialog_label_.clear();
+    active_cookie_dialog_base_message_.clear();
+    active_cookie_dialog_agent_name_.clear();
+    active_cookie_dialog_card_style_.clear();
 }
 
 void MainWindow::updateSummaryPollingForActiveAgent() {
@@ -1063,6 +1239,22 @@ void MainWindow::sendCommand(const QString& cmd, const QString& params_json) {
 
 void MainWindow::runScript(const QString& script_path) {
     try {
+        nlohmann::json cookie_snapshot = nlohmann::json::object();
+        if (data_receiver_) {
+            cookie_snapshot = data_receiver_->cookies();
+        }
+        if ((cookie_snapshot.is_null() || cookie_snapshot.empty()) && latest_node_cookies_.is_object()) {
+            cookie_snapshot = latest_node_cookies_;
+        }
+        if (cookie_snapshot.is_object() && !cookie_snapshot.empty()) {
+            bus_.publish({
+                .source = "data_receiver",
+                .target = msg::SCRIPTS_ACTUATOR,
+                .type = msg::NODE_COOKIES,
+                .payload = cookie_snapshot,
+                .coalesce_key = "node_cookies",
+            });
+        }
         bus_.publish({
             .source = msg::UI, .target = msg::SCRIPTS_ACTUATOR, .type = msg::RUN_SCRIPT,
             .payload = {{"script_path", script_path.trimmed().toStdString()}, {"agent_name", active_agent_.toStdString()}},

@@ -47,6 +47,8 @@ int main(int argc, char** argv) {
         out << "print('watchdog state response ' + sys.stdin.readline().strip(), flush=True)\n";
         out << "print('__RECORDLAB_EVENT__ {\"type\":\"watchdog_ensure_request\",\"id\":\"wd-ensure-1\",\"agent_name\":\"imu_proxy\"}', flush=True)\n";
         out << "print('watchdog ensure response ' + sys.stdin.readline().strip(), flush=True)\n";
+        out << "print('__RECORDLAB_EVENT__ {\"type\":\"host_state_request\",\"id\":\"host-state-1\",\"state_key\":\"node_cookie\"}', flush=True)\n";
+        out << "print('host state response ' + sys.stdin.readline().strip(), flush=True)\n";
         out << "print('script lifecycle error', file=sys.stderr, flush=True)\n";
     }
 
@@ -67,6 +69,7 @@ int main(int argc, char** argv) {
     bool saw_watchdog_state_output = false;
     bool saw_watchdog_ensure_output = false;
     bool saw_watchdog_ensure_request = false;
+    bool saw_host_state_output = false;
     int exit_code = -1;
     std::string script_id;
 
@@ -89,6 +92,25 @@ int main(int argc, char** argv) {
                 {"state", "HEALTHY"},
                 {"reason", "cached_for_script"},
                 {"consecutive_failures", 0},
+            },
+        });
+        bus.publish({
+            .source = "data_receiver",
+            .target = recordlab::host::msg::UI,
+            .type = recordlab::host::msg::NODE_COOKIES,
+            .payload = {
+                {"cookies", nlohmann::json::array({
+                    {
+                        {"key", "FSN"},
+                        {"value", "ABC123"},
+                        {"is_display", true},
+                    },
+                    {
+                        {"key", "name"},
+                        {"value", "Hylla"},
+                        {"is_display", true},
+                    },
+                })},
             },
         });
 
@@ -134,6 +156,10 @@ int main(int argc, char** argv) {
                         saw_cmd_response_output = saw_cmd_response_output || text.find("cmd response") != std::string::npos;
                         saw_watchdog_state_output = saw_watchdog_state_output || text.find("watchdog state response") != std::string::npos;
                         saw_watchdog_ensure_output = saw_watchdog_ensure_output || text.find("watchdog ensure response") != std::string::npos;
+                        saw_host_state_output = saw_host_state_output
+                            || (text.find("host state response") != std::string::npos
+                                && text.find("ABC123") != std::string::npos
+                                && text.find("Hylla") != std::string::npos);
                     } else if (stream == "stderr") {
                         saw_stderr = true;
                     }
@@ -211,6 +237,7 @@ int main(int argc, char** argv) {
     require(saw_cmd_response_output, "script cmd response output missing");
     require(saw_watchdog_state_output, "watchdog state response output missing");
     require(saw_watchdog_ensure_output, "watchdog ensure response output missing");
+    require(saw_host_state_output, "host state response output missing");
     require(saw_watchdog_ensure_request, "watchdog ensure request missing");
     require(saw_finished, "script_finished missing");
     require(exit_code == 0, "script should exit successfully");

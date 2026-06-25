@@ -37,6 +37,7 @@ private:
     bool handleRuntimeEvent(const QString& line);
     void handleDialogEvent(const nlohmann::json& event);
     void handleCommandRequestEvent(const nlohmann::json& event);
+    void handleHostStateRequestEvent(const nlohmann::json& event);
     void handleWatchdogStateRequestEvent(const nlohmann::json& event);
     void handleWatchdogEnsureRequestEvent(const nlohmann::json& event);
     void handleCreateDirectoryEvent(const nlohmann::json& event);
@@ -68,6 +69,7 @@ private:
     std::string current_agent_name_;
     long long current_script_pid_ = 0;
     std::unordered_map<std::string, nlohmann::json> latest_watchdog_state_by_agent_;
+    nlohmann::json latest_node_cookie_values_ = nlohmann::json::object();
 };
 
 }  // namespace recordlab::host

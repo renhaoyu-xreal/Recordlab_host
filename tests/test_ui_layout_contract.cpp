@@ -1,4 +1,10 @@
+#include <any>
+#include <sstream>
+
+#define private public
 #include "recordlab_host/ui/main_window.h"
+#undef private
+#include "recordlab_host/bus/message_types.h"
 #include "recordlab_host/ui/data_page.h"
 #include "recordlab_host/ui/entry_page.h"
 #include "recordlab_host/ui/script_page.h"
@@ -7,6 +13,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QDialog>
 #include <QGroupBox>
 #include <QBuffer>
 #include <QColor>
@@ -18,6 +25,7 @@
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTabWidget>
+#include <QTimer>
 #include <nlohmann/json.hpp>
 
 #include <arpa/inet.h>
@@ -526,5 +534,90 @@ int main(int argc, char** argv) {
     require(workspace->scriptPage()->scriptList() != nullptr, "script list missing");
     require(workspace->dataPage()->commandComboBox() != nullptr, "command combo box missing");
     require(workspace->dataPage()->commandComboBox()->findText(QStringLiteral("init_device")) >= 0, "init_device command option missing");
+
+    QTimer::singleShot(0, [&window, workspace]() {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        require(dialog != nullptr, "live cookie dialog missing");
+
+        QLabel* info_label = nullptr;
+        for (auto* label : dialog->findChildren<QLabel*>()) {
+            if (label->text().contains(QStringLiteral("当前 Agent："))) {
+                info_label = label;
+                break;
+            }
+        }
+        require(info_label != nullptr, "live cookie info label missing");
+        require(info_label->text().contains(QStringLiteral("还在获取fsn，请等待")),
+                "dialog should show fsn waiting hint before cookies arrive");
+
+        recordlab::host::HostMessage cookie_message;
+        cookie_message.source = "data_receiver";
+        cookie_message.target = recordlab::host::msg::UI;
+        cookie_message.type = recordlab::host::msg::NODE_COOKIES;
+        cookie_message.payload = {
+            {"cookies", nlohmann::json::array({
+                {
+                    {"key", "product_id"},
+                    {"value", "1082"},
+                    {"is_display", true},
+                },
+                {
+                    {"key", "name"},
+                    {"value", "Hylla"},
+                    {"is_display", true},
+                },
+                {
+                    {"key", "FSN"},
+                    {"value", "FSN123"},
+                    {"is_display", true},
+                },
+            })},
+        };
+        window.handleUIMessage(cookie_message);
+        QApplication::processEvents();
+
+        require(info_label->text().contains(QStringLiteral("1082")),
+                "dialog should refresh product id from node cookies");
+        require(info_label->text().contains(QStringLiteral("Hylla")),
+                "dialog should refresh device name from node cookies");
+        require(info_label->text().contains(QStringLiteral("FSN123")),
+                "dialog should refresh fsn from node cookies");
+
+        auto* cookie_view = workspace->dataPage()->findChild<QPlainTextEdit*>(QStringLiteral("node_cookie_view"));
+        require(cookie_view != nullptr, "node cookie view missing");
+        require(cookie_view->toPlainText().contains(QStringLiteral("product_id: 1082")),
+                "data page should mirror product id cookie");
+        require(cookie_view->toPlainText().contains(QStringLiteral("name: Hylla")),
+                "data page should mirror name cookie");
+        require(cookie_view->toPlainText().contains(QStringLiteral("FSN: FSN123")),
+                "data page should mirror fsn cookie");
+
+        dialog->accept();
+    });
+
+    recordlab::host::HostMessage dialog_message;
+    dialog_message.source = recordlab::host::msg::SCRIPTS_ACTUATOR;
+    dialog_message.target = recordlab::host::msg::UI;
+    dialog_message.type = recordlab::host::msg::UI_DIALOG_REQUEST;
+    dialog_message.payload = {
+        {"dialog_id", "dlg_live_cookie"},
+        {"kind", "multi_field_input"},
+        {"title", "参数填写"},
+        {"message", "请输入批量录制参数"},
+        {"live_cookie_card", {
+            {"agent_name", "glasses_nviz_node"},
+            {"base_message", "请输入批量录制参数"},
+            {"card_style", "background-color:#FFFDF2;border:1px solid #C8B36A;padding:8px;"},
+        }},
+        {"fields", nlohmann::json::array({
+            {
+                {"name", "traj_list"},
+                {"label", "轨迹列表"},
+                {"default", "10-1"},
+            },
+        })},
+    };
+    window.handleDialogRequest(dialog_message);
+
     return 0;
 }
