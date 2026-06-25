@@ -139,6 +139,11 @@ Nebula CSV 通过 WiFi ADB pull 时可能超过 5 分钟。涉及
 当前 Nebula 脚本约定：单次 `adb pull` timeout 为 1800 秒；脚本和 Host
 侧 `stop_record` 总 timeout 为 2100 秒。
 
+## 实时摘要轮询
+
+UI 的 `get_runtime_state` 实时摘要请求同一时间只允许一个未完成请求；上一个
+请求未返回时跳过本轮轮询，避免 summary 请求堆积并挤占脚本命令。
+
 ## Logger 定位字段
 
 `Logger::log()` 支持可选结构化 context。优先使用以下字段定位错误：

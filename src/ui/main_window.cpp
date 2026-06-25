@@ -973,6 +973,9 @@ void MainWindow::pollAgentSummary() {
     if (active_agent_.trimmed().isEmpty() || summary_data_name_.trimmed().isEmpty()) {
         return;
     }
+    if (!summary_request_id_.trimmed().isEmpty()) {
+        return;
+    }
     const QString request_id = QStringLiteral("summary_%1")
         .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     summary_request_id_ = request_id;
