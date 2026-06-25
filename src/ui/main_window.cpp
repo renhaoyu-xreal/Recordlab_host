@@ -357,6 +357,9 @@ nlohmann::json showMultiFieldInputDialog(QWidget* parent,
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
+    dialog.adjustSize();
+    const QSize dialog_size = dialog.sizeHint();
+    dialog.resize(static_cast<int>(dialog_size.width() * 1.5), dialog_size.height());
 
     const bool ok = dialog.exec() == QDialog::Accepted;
     if (accepted) *accepted = ok;
