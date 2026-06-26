@@ -53,12 +53,14 @@ int main() {
     {
         HostMessageBus bus;
         bus.registerConsumer(msg::AGENT_MANAGER);
+        bus.registerConsumer(msg::AGENT_MANAGER_HEALTH);
+        bus.registerConsumer(msg::AGENT_MANAGER_PRIORITY);
         bus.registerConsumer(msg::UI);
         Watchdog watchdog(bus);
         watchdog.start();
         watchdog.setActiveAgent("agent");
 
-        auto check = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
+        auto check = waitForType(bus, msg::AGENT_MANAGER_HEALTH, msg::CMD_REQUEST);
         assert(check.payload.value("agent_name", "") == "agent");
         assert(check.payload.value("cmd", "") == "check");
         publishResult(bus, "check", true);
@@ -67,7 +69,7 @@ int main() {
         assert(first.payload.value("agent_name", "") == "agent");
         publishResult(bus, "init_device", true);
 
-        auto start = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
+        auto start = waitForType(bus, msg::AGENT_MANAGER_PRIORITY, msg::CMD_REQUEST);
         assert(start.payload.value("agent_name", "") == "agent");
         assert(start.payload.value("cmd", "") == "start_device");
         assert(start.payload.value("silent", false) == true);
@@ -100,12 +102,14 @@ int main() {
     {
         HostMessageBus bus;
         bus.registerConsumer(msg::AGENT_MANAGER);
+        bus.registerConsumer(msg::AGENT_MANAGER_HEALTH);
+        bus.registerConsumer(msg::AGENT_MANAGER_PRIORITY);
         bus.registerConsumer(msg::UI);
         Watchdog watchdog(bus);
         watchdog.start();
         watchdog.setActiveAgent("agent");
 
-        auto first_check = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
+        auto first_check = waitForType(bus, msg::AGENT_MANAGER_HEALTH, msg::CMD_REQUEST);
         assert(first_check.payload.value("cmd", "") == "check");
         publishResult(bus, "check", true);
 
@@ -114,7 +118,7 @@ int main() {
             assert(init.payload.value("agent_name", "") == "agent");
             publishResult(bus, "init_device", false, "init failed");
             if (attempt < 2) {
-                auto release = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
+                auto release = waitForType(bus, msg::AGENT_MANAGER_PRIORITY, msg::CMD_REQUEST);
                 assert(release.payload.value("cmd", "") == "reboot_device");
                 publishResult(bus, "reboot_device", true);
             }
@@ -135,7 +139,7 @@ int main() {
         assert(notification.payload.value("error_code", "") == "INIT_DEVICE_FAILED");
         assert(notification.payload.value("state", "") == "ERROR");
 
-        auto healthy_check = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST, 4000);
+        auto healthy_check = waitForType(bus, msg::AGENT_MANAGER_HEALTH, msg::CMD_REQUEST, 4000);
         assert(healthy_check.payload.value("cmd", "") == "check");
         publishResult(bus, "check", true);
 
@@ -150,7 +154,7 @@ int main() {
         assert(stayed_error);
 
         for (int attempt = 0; attempt < Watchdog::kMaxCheckFailures; ++attempt) {
-            auto check = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST, 4000);
+            auto check = waitForType(bus, msg::AGENT_MANAGER_HEALTH, msg::CMD_REQUEST, 4000);
             assert(check.payload.value("cmd", "") == "check");
             publishResult(bus, "check", false, "device missing");
         }
@@ -170,6 +174,8 @@ int main() {
     {
         HostMessageBus bus;
         bus.registerConsumer(msg::AGENT_MANAGER);
+        bus.registerConsumer(msg::AGENT_MANAGER_HEALTH);
+        bus.registerConsumer(msg::AGENT_MANAGER_PRIORITY);
         bus.registerConsumer(msg::SCRIPTS_ACTUATOR);
         bus.registerConsumer(msg::UI);
         Watchdog watchdog(bus);
@@ -177,7 +183,7 @@ int main() {
         watchdog.setActiveAgent("primary");
         watchdog.setMonitoredAgents({"primary", "remote"}, false);
 
-        auto primary_check = waitForMatching(bus, msg::AGENT_MANAGER, [](const HostMessage& item) {
+        auto primary_check = waitForMatching(bus, msg::AGENT_MANAGER_HEALTH, [](const HostMessage& item) {
             return item.type == msg::CMD_REQUEST &&
                    item.payload.value("agent_name", std::string{}) == "primary" &&
                    item.payload.value("cmd", std::string{}) == "check";
@@ -196,7 +202,7 @@ int main() {
             },
         });
 
-        auto remote_check = waitForMatching(bus, msg::AGENT_MANAGER, [](const HostMessage& item) {
+        auto remote_check = waitForMatching(bus, msg::AGENT_MANAGER_HEALTH, [](const HostMessage& item) {
             return item.type == msg::CMD_REQUEST &&
                    item.payload.value("agent_name", std::string{}) == "remote" &&
                    item.payload.value("cmd", std::string{}) == "check";
@@ -222,7 +228,7 @@ int main() {
         bool saw_remote_stop_record = false;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         while (std::chrono::steady_clock::now() < deadline && !(saw_primary_stop_record && saw_remote_stop_record)) {
-            auto item = bus.waitFor(msg::AGENT_MANAGER, 100);
+            auto item = bus.waitFor(msg::AGENT_MANAGER_PRIORITY, 100);
             if (!item || item->type != msg::CMD_REQUEST ||
                 item->payload.value("cmd", std::string{}) != "stop_record") {
                 continue;
@@ -239,13 +245,15 @@ int main() {
     {
         HostMessageBus bus;
         bus.registerConsumer(msg::AGENT_MANAGER);
+        bus.registerConsumer(msg::AGENT_MANAGER_HEALTH);
+        bus.registerConsumer(msg::AGENT_MANAGER_PRIORITY);
         bus.registerConsumer(msg::SCRIPTS_ACTUATOR);
         bus.registerConsumer(msg::UI);
         Watchdog watchdog(bus);
         watchdog.start();
         watchdog.setActiveAgent("primary", false);
 
-        auto check = waitForMatching(bus, msg::AGENT_MANAGER, [](const HostMessage& item) {
+        auto check = waitForMatching(bus, msg::AGENT_MANAGER_HEALTH, [](const HostMessage& item) {
             return item.type == msg::CMD_REQUEST &&
                    item.payload.value("agent_name", std::string{}) == "primary" &&
                    item.payload.value("cmd", std::string{}) == "check";
@@ -295,7 +303,7 @@ int main() {
         while (std::chrono::steady_clock::now() < deadline) {
             auto stop = bus.waitFor(msg::SCRIPTS_ACTUATOR, 100);
             assert(!stop.has_value());
-            auto request = bus.waitFor(msg::AGENT_MANAGER, 100);
+            auto request = bus.waitFor(msg::AGENT_MANAGER_HEALTH, 100);
             if (!request) {
                 continue;
             }
@@ -310,12 +318,14 @@ int main() {
     {
         HostMessageBus bus;
         bus.registerConsumer(msg::AGENT_MANAGER);
+        bus.registerConsumer(msg::AGENT_MANAGER_HEALTH);
+        bus.registerConsumer(msg::AGENT_MANAGER_PRIORITY);
         bus.registerConsumer(msg::UI);
         Watchdog watchdog(bus);
         watchdog.start();
         watchdog.setActiveAgent("agent", false);
 
-        auto check = waitForType(bus, msg::AGENT_MANAGER, msg::CMD_REQUEST);
+        auto check = waitForType(bus, msg::AGENT_MANAGER_HEALTH, msg::CMD_REQUEST);
         assert(check.payload.value("cmd", "") == "check");
         publishResult(bus, "check", true);
 
@@ -343,7 +353,7 @@ int main() {
             },
         });
 
-        auto start = waitForMatching(bus, msg::AGENT_MANAGER, [](const HostMessage& item) {
+        auto start = waitForMatching(bus, msg::AGENT_MANAGER_PRIORITY, [](const HostMessage& item) {
             return item.type == msg::CMD_REQUEST &&
                    item.payload.value("agent_name", std::string{}) == "agent" &&
                    item.payload.value("cmd", std::string{}) == "start_device";
