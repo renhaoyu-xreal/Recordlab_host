@@ -7,6 +7,7 @@
 #include "recordlab_host/ui/entry_page.h"
 #include "recordlab_host/ui/sensor_workspace_widget.h"
 #include "recordlab_host/ui/script_page.h"
+#include "recordlab_host/ui/virtual_nodes_page.h"
 #include "recordlab_host/ui/workspace_page.h"
 
 #include <QComboBox>
@@ -539,6 +540,7 @@ MainWindow::MainWindow(std::string agents_config_path,
                        QWidget* parent)
     : QMainWindow(parent),
       agents_config_path_(std::move(agents_config_path)),
+      original_agents_config_path_(agents_config_path_),
       nodes_root_(QString::fromStdString(nodes_root)),
       echo_python_root_(QString::fromStdString(echo_python_root)),
       data_root_(QString::fromStdString(data_root)),
@@ -562,6 +564,10 @@ MainWindow::MainWindow(std::string agents_config_path,
 
     // ── Architecture components (PLAN.md) ──────────────────────
     bus_.registerConsumer(msg::UI);
+
+    virtual_node_config_manager_ = std::make_unique<VirtualNodeConfigManager>(
+        original_agents_config_path_, nodes_root);
+    applyVirtualUrConfig(virtual_node_config_manager_->virtualUrConfig());
 
     agent_manager_ = std::make_unique<AgentManager>(
         bus_, agents_config_path_, nodes_root, echo_python_root, python_bin, node_runtime_module);
@@ -615,6 +621,14 @@ MainWindow::MainWindow(std::string agents_config_path,
     workspace_page_->bindMainWindow(this);
     workspace_page_->scriptPage()->setDataRoot(data_root_qt);
     workspace_page_->dataPage()->setDataRoot(data_root_qt);
+    if (workspace_page_->virtualNodesPage()) {
+        workspace_page_->virtualNodesPage()->setVirtualUrEnabled(
+            virtual_node_config_manager_->virtualUrConfig().enabled);
+        connect(workspace_page_->virtualNodesPage(), &VirtualNodesPage::virtualUrToggleRequested,
+                this, &MainWindow::handleVirtualUrToggleRequested);
+        connect(workspace_page_->virtualNodesPage(), &VirtualNodesPage::virtualUrSettingsChanged,
+                this, &MainWindow::handleVirtualUrSettingsChanged);
+    }
     stack_->addWidget(entry_page_);
     stack_->addWidget(workspace_page_);
     setCentralWidget(stack_);
@@ -796,10 +810,17 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
     }
 
     // ── ScriptsActuator messages ──
+    if (m.type == msg::SCRIPT_STARTED) {
+        script_running_ = true;
+        return;
+    }
     if (m.type == msg::SCRIPT_FINISHED) {
+        script_running_ = false;
         pending_script_agents_.clear();
         script_monitoring_started_ = false;
         const bool stop_requested = jsonBoolValue(m.payload, "stop_requested", false);
+        const bool has_active_agent = !active_agent_.trimmed().isEmpty();
+        const std::string active_agent = has_active_agent ? active_agent_.toStdString() : std::string{};
         bus_.publish({
             .source = msg::UI,
             .target = msg::AGENT_MANAGER,
@@ -807,9 +828,14 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         });
         if (watchdog_) {
             if (stop_requested) {
-                watchdog_->clearActiveAgent();
-            } else if (!active_agent_.trimmed().isEmpty()) {
-                const std::string active_agent = active_agent_.toStdString();
+                if (has_active_agent) {
+                    // 停脚本后仍需继续监控当前主 Agent，避免 UI 后续看不到
+                    // 新数据或失去自动恢复能力；这里只退出脚本期的多节点监控。
+                    watchdog_->setMonitoredAgents({active_agent}, false);
+                } else {
+                    watchdog_->clearActiveAgent();
+                }
+            } else if (has_active_agent) {
                 bool watchdog_start_device = true;
                 if (agent_manager_) {
                     try {
@@ -821,6 +847,9 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
             } else {
                 watchdog_->clearActiveAgent();
             }
+        }
+        if (stop_requested && has_active_agent) {
+            updateSummaryPollingForActiveAgent();
         }
         const int exit_code = m.payload.value("exit_code", -1);
         const bool graceful_stop = stop_requested && (exit_code == 0 || exit_code == 130);
@@ -1320,6 +1349,80 @@ void MainWindow::shutdown() {
     } catch (...) {
         reportQtException(QStringLiteral("shutdown"));
     }
+}
+
+void MainWindow::handleVirtualUrToggleRequested(bool enabled) {
+    try {
+        if (script_running_) {
+            if (workspace_page_ && workspace_page_->virtualNodesPage()) {
+                workspace_page_->virtualNodesPage()->setVirtualUrEnabled(
+                    virtual_node_config_manager_
+                    ? virtual_node_config_manager_->virtualUrConfig().enabled
+                    : false);
+            }
+            QMessageBox::warning(
+                this,
+                QStringLiteral("无法切换虚拟节点"),
+                QStringLiteral("脚本执行中不允许切换虚拟 UR 节点，请先停止当前脚本。"));
+            return;
+        }
+        if (!virtual_node_config_manager_) {
+            return;
+        }
+        auto config = virtual_node_config_manager_->virtualUrConfig();
+        config.enabled = enabled;
+        virtual_node_config_manager_->setVirtualUrConfig(config);
+        applyVirtualUrConfig(config);
+        if (workspace_page_ && workspace_page_->virtualNodesPage()) {
+            workspace_page_->virtualNodesPage()->setVirtualUrEnabled(enabled);
+        }
+        bus_.publish({
+            .source = msg::UI,
+            .target = msg::AGENT_MANAGER,
+            .type = msg::RELEASE_INACTIVE_AGENTS,
+        });
+        appendLog(
+            enabled ? QStringLiteral("已启用虚拟 UR_node") : QStringLiteral("已关闭虚拟 UR_node"),
+            QStringLiteral("info"),
+            QStringLiteral("virtual_node"));
+    } catch (const std::exception& e) {
+        reportQtException(QStringLiteral("handleVirtualUrToggleRequested"), &e);
+    } catch (...) {
+        reportQtException(QStringLiteral("handleVirtualUrToggleRequested"));
+    }
+}
+
+void MainWindow::handleVirtualUrSettingsChanged(int trajectory_duration_s,
+                                                int trajectory_file_size_mib,
+                                                int trajectory_return_rate_mib_per_s) {
+    try {
+        if (!virtual_node_config_manager_) {
+            return;
+        }
+        auto config = virtual_node_config_manager_->virtualUrConfig();
+        config.trajectory_duration_s = trajectory_duration_s;
+        config.trajectory_file_size_mib = trajectory_file_size_mib;
+        config.trajectory_return_rate_mib_per_s = trajectory_return_rate_mib_per_s;
+        virtual_node_config_manager_->setVirtualUrConfig(config);
+        applyVirtualUrConfig(config);
+        bus_.publish({
+            .source = msg::UI,
+            .target = msg::AGENT_MANAGER,
+            .type = msg::RELEASE_INACTIVE_AGENTS,
+        });
+    } catch (const std::exception& e) {
+        reportQtException(QStringLiteral("handleVirtualUrSettingsChanged"), &e);
+    } catch (...) {
+        reportQtException(QStringLiteral("handleVirtualUrSettingsChanged"));
+    }
+}
+
+void MainWindow::applyVirtualUrConfig(const VirtualUrNodeConfig& config) {
+    if (!virtual_node_config_manager_) {
+        return;
+    }
+    agents_config_path_ = virtual_node_config_manager_->effectiveConfigPath();
+    Q_UNUSED(config);
 }
 
 // ── Agent loading ─────────────────────────────────────────────

@@ -17,6 +17,7 @@ class MainWindow;
 class RecordTimerDisplayWidget;
 class ScriptPage;
 class TimeDelayDisplayWidget;
+class VirtualNodesPage;
 
 class WorkspacePage : public QWidget {
     Q_OBJECT
@@ -29,6 +30,7 @@ public:
     QTabWidget* tabWidget() const;
     ScriptPage* scriptPage() const;
     DataPage* dataPage() const;
+    VirtualNodesPage* virtualNodesPage() const;
     void bindMainWindow(MainWindow* mainWindow);
     void handleTopicData(const QString& name, const nlohmann::json& value, double frequency);
     void configureSensorLayout(const nlohmann::json& sensor_layout);
@@ -46,6 +48,7 @@ private:
     QTabWidget* tabs_ = nullptr;
     ScriptPage* script_page_ = nullptr;
     DataPage* data_page_ = nullptr;
+    VirtualNodesPage* virtual_nodes_page_ = nullptr;
     MainWindow* main_window_ = nullptr;
     QSet<QString> active_tab_only_topics_;
 };

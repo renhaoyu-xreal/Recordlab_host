@@ -2,6 +2,7 @@
 
 #include "recordlab_host/agents/agent_manager.h"
 #include "recordlab_host/bus/host_message_bus.h"
+#include "recordlab_host/common/virtual_node_config_manager.h"
 #include "recordlab_host/data/data_registry_server.h"
 #include "recordlab_host/data/data_receiver.h"
 #include "recordlab_host/lifecycle/watchdog.h"
@@ -86,9 +87,15 @@ private:
     void showStartupMessages();
     void updateActiveCookieBoundDialog();
     void clearActiveCookieBoundDialog();
+    void handleVirtualUrToggleRequested(bool enabled);
+    void handleVirtualUrSettingsChanged(int trajectory_duration_s,
+                                        int trajectory_file_size_mib,
+                                        int trajectory_return_rate_mib_per_s);
+    void applyVirtualUrConfig(const VirtualUrNodeConfig& config);
 
     // ── Paths / config ─────────────────────────────────────────
     std::string agents_config_path_;
+    std::string original_agents_config_path_;
     QString nodes_root_;
     QString echo_python_root_;
     QString data_root_;
@@ -100,11 +107,13 @@ private:
     int data_registry_port_ = 16600;
     QString active_agent_;
     bool active_agent_connected_ = false;
+    bool script_running_ = false;
     std::vector<std::string> pending_script_agents_;
     bool script_monitoring_started_ = false;
 
     // ── Architecture components (PLAN.md) ──────────────────────
     HostMessageBus bus_;
+    std::unique_ptr<VirtualNodeConfigManager> virtual_node_config_manager_;
     std::unique_ptr<AgentManager> agent_manager_;
     std::unique_ptr<Watchdog> watchdog_;
     std::unique_ptr<DataReceiver> data_receiver_;

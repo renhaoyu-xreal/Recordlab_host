@@ -9,6 +9,7 @@
 #include "recordlab_host/ui/entry_page.h"
 #include "recordlab_host/ui/script_page.h"
 #include "recordlab_host/ui/sensor_workspace_widget.h"
+#include "recordlab_host/ui/virtual_nodes_page.h"
 #include "recordlab_host/ui/workspace_page.h"
 
 #include <QApplication>
@@ -16,13 +17,16 @@
 #include <QDialog>
 #include <QGroupBox>
 #include <QBuffer>
+#include <QCheckBox>
 #include <QColor>
 #include <QImage>
 #include <QLabel>
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSettings>
 #include <QSplitter>
+#include <QSpinBox>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTimer>
@@ -210,6 +214,11 @@ ScopedCameraShm createJpegCameraShm(std::uint64_t seq = 2) {
 
 int main(int argc, char** argv) {
     ensureApp(argc, argv);
+    const QString settings_root = QStringLiteral("/tmp/recordlab_ui_settings_%1").arg(::getpid());
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings_root);
+    QSettings settings(QSettings::IniFormat, QSettings::UserScope,
+                       QStringLiteral("RecordLab"), QStringLiteral("RecordLabHost"));
+    settings.clear();
 
     const std::string config_path = "/tmp/recordlab_ui_agents_config.json";
     std::ofstream config(config_path);
@@ -264,9 +273,33 @@ int main(int argc, char** argv) {
 
     auto* tabs = workspace->tabWidget();
     require(tabs != nullptr, "workspace tabs missing");
-    require(tabs->count() == 2, "workspace should expose exactly two tabs");
+    require(tabs->count() == 3, "workspace should expose exactly three tabs");
     require(tabs->tabText(0) == QStringLiteral("脚本执行"), "first tab should be script execution");
     require(tabs->tabText(1) == QStringLiteral("数据 + 命令"), "second tab should be data + command");
+    require(tabs->tabText(2) == QStringLiteral("虚拟节点"), "third tab should be virtual nodes");
+    auto* virtual_nodes_page = workspace->virtualNodesPage();
+    require(virtual_nodes_page != nullptr, "virtual nodes page missing");
+    auto* virtual_nodes_list = virtual_nodes_page->findChild<QListWidget*>("virtual_nodes_list");
+    auto* virtual_ur_toggle = virtual_nodes_page->findChild<QCheckBox*>("virtual_node_toggle_UR_node");
+    auto* virtual_ur_duration = virtual_nodes_page->findChild<QSpinBox*>("virtual_ur_duration_spinbox");
+    auto* virtual_ur_file_size = virtual_nodes_page->findChild<QSpinBox*>("virtual_ur_file_size_spinbox");
+    auto* virtual_ur_return_rate = virtual_nodes_page->findChild<QSpinBox*>("virtual_ur_return_rate_spinbox");
+    require(virtual_nodes_list != nullptr && virtual_nodes_list->count() == 1, "virtual nodes list should contain UR_node");
+    require(virtual_ur_toggle != nullptr, "virtual UR toggle missing");
+    require(virtual_ur_duration != nullptr && virtual_ur_duration->value() == 20, "virtual UR default duration should be 20s");
+    require(virtual_ur_file_size != nullptr && virtual_ur_file_size->value() == 32, "virtual UR default file size should be 32 MiB");
+    require(virtual_ur_return_rate != nullptr && virtual_ur_return_rate->value() == 8, "virtual UR default return rate should be 8 MiB/s");
+    require(!virtual_ur_toggle->isChecked(), "virtual UR should default to disabled");
+
+    virtual_ur_duration->setValue(26);
+    virtual_ur_file_size->setValue(48);
+    virtual_ur_return_rate->setValue(12);
+    QApplication::processEvents();
+    recordlab::host::ui::VirtualNodesPage restored_page;
+    require(restored_page.trajectoryDurationSeconds() == 26, "virtual UR duration should persist");
+    require(restored_page.trajectoryFileSizeMiB() == 48, "virtual UR file size should persist");
+    require(restored_page.trajectoryReturnRateMiBPerS() == 12, "virtual UR return rate should persist");
+    require(!restored_page.isVirtualUrEnabled(), "virtual UR toggle should not auto-restore");
     auto* script_output_tabs = workspace->scriptPage()->findChild<QTabWidget*>("script_output_tabs");
     require(script_output_tabs != nullptr, "script output tabs missing");
     require(script_output_tabs->tabText(0).startsWith(QStringLiteral("data输出目录：")), "script data tab should include output path");

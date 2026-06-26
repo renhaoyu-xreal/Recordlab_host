@@ -27,6 +27,7 @@ endif()
 add_library(recordlab_host
   include/recordlab_host/common/logger.h
   include/recordlab_host/common/runtime_config.h
+  include/recordlab_host/common/virtual_node_config_manager.h
   include/recordlab_host/agents/agent_proxy.h
   include/recordlab_host/data/camera_shared_memory.h
   include/recordlab_host/data/data_registry_server.h
@@ -42,6 +43,7 @@ add_library(recordlab_host
   include/recordlab_host/ui/script_page.h
   include/recordlab_host/ui/sensor_workspace_widget.h
   include/recordlab_host/ui/status_display_widget.h
+  include/recordlab_host/ui/virtual_nodes_page.h
   include/recordlab_host/ui/workspace_page.h
   ${ECHO_CPP_DIR}/src/action.cpp
   ${ECHO_CPP_DIR}/src/context.cpp
@@ -59,6 +61,7 @@ add_library(recordlab_host
   src/common/logger.cpp
   src/common/process_handle.cpp
   src/common/runtime_config.cpp
+  src/common/virtual_node_config_manager.cpp
   src/data/camera_shared_memory.cpp
   src/data/data_registry_server.cpp
   src/data/sensor_queue.cpp
@@ -74,6 +77,7 @@ add_library(recordlab_host
   src/ui/script_page.cpp
   src/ui/sensor_workspace_widget.cpp
   src/ui/status_display_widget.cpp
+  src/ui/virtual_nodes_page.cpp
   src/ui/workspace_page.cpp
 )
 
@@ -115,6 +119,7 @@ foreach(test_name
   test_watchdog_lifecycle
   test_echo_python_integration
   test_ui_layout_contract
+  test_virtual_node_config_manager
   test_watchdog_state_machine
 )
   add_executable(${test_name} tests/${test_name}.cpp)

@@ -7,6 +7,7 @@
 #include "recordlab_host/ui/sensor_workspace_widget.h"
 #include "recordlab_host/ui/script_page.h"
 #include "recordlab_host/ui/status_display_widget.h"
+#include "recordlab_host/ui/virtual_nodes_page.h"
 
 #include <QFrame>
 #include <QComboBox>
@@ -77,8 +78,10 @@ WorkspacePage::WorkspacePage(QWidget* parent) : QWidget(parent) {
     tabs_->setObjectName(QStringLiteral("main_tabs"));
     script_page_ = new ScriptPage(tabs_);
     data_page_ = new DataPage(tabs_);
+    virtual_nodes_page_ = new VirtualNodesPage(tabs_);
     tabs_->addTab(script_page_, QStringLiteral("脚本执行"));
     tabs_->addTab(data_page_, QStringLiteral("数据 + 命令"));
+    tabs_->addTab(virtual_nodes_page_, QStringLiteral("虚拟节点"));
     root_layout->addWidget(tabs_, 1);
 
     updateHeader();
@@ -109,6 +112,10 @@ ScriptPage* WorkspacePage::scriptPage() const {
 
 DataPage* WorkspacePage::dataPage() const {
     return data_page_;
+}
+
+VirtualNodesPage* WorkspacePage::virtualNodesPage() const {
+    return virtual_nodes_page_;
 }
 
 void WorkspacePage::bindMainWindow(MainWindow* mainWindow) {

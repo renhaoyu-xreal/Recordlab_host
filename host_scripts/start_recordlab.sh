@@ -49,8 +49,20 @@ if ! "${RECORDLAB_PYTHON_BIN}" -c "import recordlab_nodes, message_system" >/dev
   exit 1
 fi
 
+needs_rebuild=0
 if [[ ! -x "${APP_BIN}" ]]; then
-  echo "[recordlab] host app is not built; building now"
+  needs_rebuild=1
+elif find \
+  "${HOST_ROOT}/CMakeLists.txt" \
+  "${HOST_ROOT}/app" \
+  "${HOST_ROOT}/include" \
+  "${HOST_ROOT}/src" \
+  -type f -newer "${APP_BIN}" | grep -q .; then
+  needs_rebuild=1
+fi
+
+if [[ "${needs_rebuild}" -eq 1 ]]; then
+  echo "[recordlab] host app is missing or out of date; building now"
   cmake -S "${HOST_ROOT}" -B "${HOST_ROOT}/build" \
     -DRECORDLAB_THIRD_PARTY_DIR="${THIRD_PARTY_ROOT}" \
     -DECHO_MESSAGE_SYSTEM_ROOT="${ECHO_ROOT}"
