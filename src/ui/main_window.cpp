@@ -799,13 +799,16 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
     if (m.type == msg::SCRIPT_FINISHED) {
         pending_script_agents_.clear();
         script_monitoring_started_ = false;
+        const bool stop_requested = jsonBoolValue(m.payload, "stop_requested", false);
         bus_.publish({
             .source = msg::UI,
             .target = msg::AGENT_MANAGER,
             .type = msg::RELEASE_INACTIVE_AGENTS,
         });
         if (watchdog_) {
-            if (!active_agent_.trimmed().isEmpty()) {
+            if (stop_requested) {
+                watchdog_->clearActiveAgent();
+            } else if (!active_agent_.trimmed().isEmpty()) {
                 const std::string active_agent = active_agent_.toStdString();
                 bool watchdog_start_device = true;
                 if (agent_manager_) {
@@ -819,7 +822,24 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
                 watchdog_->clearActiveAgent();
             }
         }
-        emit scriptFinished(m.payload.value("exit_code", -1));
+        const int exit_code = m.payload.value("exit_code", -1);
+        const bool graceful_stop = stop_requested && (exit_code == 0 || exit_code == 130);
+        if (stop_script_requested_by_user_) {
+            stop_script_requested_by_user_ = false;
+            QTimer::singleShot(0, this, [this, graceful_stop]() {
+                auto* dialog = new QMessageBox(
+                    graceful_stop ? QMessageBox::Information : QMessageBox::Warning,
+                    graceful_stop ? QStringLiteral("停止成功") : QStringLiteral("停止已触发"),
+                    graceful_stop
+                        ? QStringLiteral("脚本已停止，机械臂急停与收尾已完成。")
+                        : QStringLiteral("已请求停止脚本和机械臂急停，请检查设备状态。"),
+                    QMessageBox::Ok,
+                    this);
+                dialog->setAttribute(Qt::WA_DeleteOnClose, true);
+                dialog->open();
+            });
+        }
+        emit scriptFinished(exit_code);
         return;
     }
     if (m.type == msg::SCRIPT_REQUIRED_AGENTS) {
@@ -1255,6 +1275,7 @@ void MainWindow::runScript(const QString& script_path) {
                 .coalesce_key = "node_cookies",
             });
         }
+        stop_script_requested_by_user_ = false;
         bus_.publish({
             .source = msg::UI, .target = msg::SCRIPTS_ACTUATOR, .type = msg::RUN_SCRIPT,
             .payload = {{"script_path", script_path.trimmed().toStdString()}, {"agent_name", active_agent_.toStdString()}},
@@ -1268,6 +1289,7 @@ void MainWindow::runScript(const QString& script_path) {
 
 void MainWindow::stopScript() {
     try {
+        stop_script_requested_by_user_ = true;
         bus_.publish({
             .source = msg::UI, .target = msg::SCRIPTS_ACTUATOR, .type = msg::STOP_SCRIPT,
         });

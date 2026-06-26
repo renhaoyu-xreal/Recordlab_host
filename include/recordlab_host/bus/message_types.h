@@ -6,6 +6,8 @@ namespace recordlab::host::msg {
 // ── Bus targets (consumer queue names) ─────────────────────────
 constexpr const char* UI              = "ui";
 constexpr const char* AGENT_MANAGER   = "agent_manager";
+constexpr const char* AGENT_MANAGER_HEALTH = "agent_manager_health";
+constexpr const char* AGENT_MANAGER_PRIORITY = "agent_manager_priority";
 constexpr const char* SCRIPTS_ACTUATOR = "scripts_actuator";
 constexpr const char* WATCHDOG        = "watchdog";
 constexpr const char* WATCHDOG_CONTROL = "watchdog_control";

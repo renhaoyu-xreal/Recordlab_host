@@ -110,6 +110,7 @@ foreach(test_name
   test_process_handle
   test_runtime_config
   test_scripts_actuator_lifecycle
+  test_scripts_actuator_stop
   test_sensor_queue
   test_watchdog_lifecycle
   test_echo_python_integration

@@ -7,7 +7,10 @@
 #include <QProcessEnvironment>
 #include <QUuid>
 
+#include <algorithm>
+#include <cctype>
 #include <exception>
+#include <fstream>
 #include <functional>
 
 namespace recordlab::host {
@@ -83,6 +86,148 @@ nlohmann::json makeLogPayload(std::string message,
     extra["level"] = std::move(level);
     extra["log_type"] = std::move(log_type);
     return extra;
+}
+
+bool isUrAgentName(const std::string& agent_name) {
+    std::string normalized = agent_name;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return normalized == "ur_node" || normalized.rfind("ur_", 0) == 0;
+}
+
+bool scriptReferencesUrAgent(const std::string& script_path) {
+    if (script_path.empty()) {
+        return false;
+    }
+    std::ifstream in(script_path);
+    if (!in.is_open()) {
+        return false;
+    }
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return text.find("UR_node") != std::string::npos || text.find("ur_node") != std::string::npos;
+}
+
+nlohmann::json workflowStepsFromPayload(const nlohmann::json& payload) {
+    if (payload.is_object()) {
+        const auto steps_it = payload.find("steps");
+        if (steps_it != payload.end() && steps_it->is_array()) {
+            return *steps_it;
+        }
+        const auto steps_json_it = payload.find("steps_json");
+        if (steps_json_it != payload.end() && steps_json_it->is_string()) {
+            try {
+                const auto parsed = nlohmann::json::parse(steps_json_it->get<std::string>());
+                if (parsed.is_array()) {
+                    return parsed;
+                }
+            } catch (...) {
+            }
+        }
+    }
+    return nlohmann::json::array();
+}
+
+nlohmann::json buildStopWorkflowPayload(nlohmann::json payload, bool finished, bool graceful) {
+    if (!payload.is_object()) {
+        payload = nlohmann::json::object();
+    }
+    auto steps = workflowStepsFromPayload(payload);
+    if (!steps.is_array()) {
+        steps = nlohmann::json::array();
+    }
+    if (steps.empty()) {
+        steps.push_back({
+            {"label", "停止执行"},
+            {"status", finished ? "stopped" : "stopping"},
+        });
+    }
+
+    const std::string running_message = "用户停止执行，正在停止机械臂并收尾";
+    const std::string stopped_message = graceful
+        ? "用户停止执行，已停止并完成收尾"
+        : "用户停止执行，机械臂已请求急停，脚本已中断";
+
+    bool updated = false;
+    if (!finished) {
+        for (auto& step : steps) {
+            if (!step.is_object()) {
+                continue;
+            }
+            const auto status = step.value("status", std::string{});
+            if (status == "running") {
+                step["status"] = "stopping";
+                step["message"] = running_message;
+                updated = true;
+            }
+        }
+        if (!updated) {
+            for (auto& step : steps) {
+                if (!step.is_object()) {
+                    continue;
+                }
+                const auto status = step.value("status", std::string{});
+                if (status == "pending") {
+                    step["status"] = "stopping";
+                    step["message"] = running_message;
+                    updated = true;
+                    break;
+                }
+            }
+        }
+        if (!updated) {
+            for (auto it = steps.rbegin(); it != steps.rend(); ++it) {
+                if (!it->is_object()) {
+                    continue;
+                }
+                (*it)["status"] = "stopping";
+                (*it)["message"] = running_message;
+                updated = true;
+                break;
+            }
+        }
+    } else {
+        for (auto& step : steps) {
+            if (!step.is_object()) {
+                continue;
+            }
+            const auto status = step.value("status", std::string{});
+            if (status == "stopping" || status == "running") {
+                step["status"] = "stopped";
+                step["message"] = stopped_message;
+                updated = true;
+            }
+        }
+        if (!updated) {
+            for (auto it = steps.rbegin(); it != steps.rend(); ++it) {
+                if (!it->is_object()) {
+                    continue;
+                }
+                const auto status = it->value("status", std::string{});
+                if (status != "success") {
+                    (*it)["status"] = "stopped";
+                    (*it)["message"] = stopped_message;
+                    updated = true;
+                    break;
+                }
+            }
+        }
+        if (!updated && !steps.empty() && steps.back().is_object()) {
+            steps.back()["status"] = "stopped";
+            steps.back()["message"] = stopped_message;
+        }
+    }
+
+    payload["action"] = "state";
+    if (payload.find("title") == payload.end() || !payload["title"].is_string()) {
+        payload["title"] = "脚本流程";
+    }
+    payload["message"] = finished ? stopped_message : running_message;
+    payload["finished"] = finished;
+    payload["success"] = finished ? graceful : false;
+    payload["steps"] = steps;
+    payload["steps_json"] = steps.dump();
+    return payload;
 }
 
 }  // namespace
@@ -173,6 +318,8 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
     current_script_path_ = resolved.toStdString();
     current_agent_name_ = agent_name;
     current_script_pid_ = 0;
+    current_script_required_agents_.clear();
+    last_workflow_payload_ = nlohmann::json::object();
     script_process_ = std::make_unique<QProcess>();
     script_process_->setWorkingDirectory(nodes_root_);
     script_process_->setProcessChannelMode(QProcess::SeparateChannels);
@@ -242,7 +389,12 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
             if (!stderr_buffer_.trimmed().isEmpty()) processOutputLine(QString::fromUtf8(stderr_buffer_).trimmed(), "stderr");
             stdout_buffer_.clear();
             stderr_buffer_.clear();
-            (void)exit_status;
+            const bool graceful_stop = stop_requested_
+                && exit_status == QProcess::NormalExit
+                && (exit_code == 0 || exit_code == 130);
+            if (stop_requested_) {
+                publishStopWorkflowState(true, graceful_stop);
+            }
             const auto pid = current_script_pid_;
             publishToUI(msg::SCRIPT_FINISHED, {
                 {"script_id", current_script_id_},
@@ -252,8 +404,12 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
                 {"stop_requested", stop_requested_},
             });
             publishLog(
-                stop_requested_ ? "脚本已停止并完成收尾" : "脚本退出: " + std::to_string(exit_code),
-                stop_requested_ || exit_code == 0 ? "success" : "error",
+                stop_requested_
+                    ? (graceful_stop
+                        ? "脚本已停止并完成收尾"
+                        : "脚本已中断退出，机械臂已请求急停，退出码: " + std::to_string(exit_code))
+                    : "脚本退出: " + std::to_string(exit_code),
+                stop_requested_ ? (graceful_stop ? "success" : "warning") : (exit_code == 0 ? "success" : "error"),
                 "script",
                 {
                     {"process", "script"},
@@ -293,6 +449,8 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
 void ScriptsActuator::doStopScript() {
     stop_requested_ = true;
     if (script_process_ && script_process_->state() != QProcess::NotRunning) {
+        publishStopWorkflowState(false, false);
+        requestEmergencyStopForScriptAgents();
         script_process_->terminate();
         QTimer::singleShot(25000, this, [this]() {
             try {
@@ -303,7 +461,7 @@ void ScriptsActuator::doStopScript() {
                 reportException("kill script process");
             }
         });
-        publishLog("脚本已停止", "warning", "script");
+        publishLog("正在停止脚本，并请求机械臂急停", "warning", "script");
     }
 }
 
@@ -370,7 +528,7 @@ bool ScriptsActuator::handleRuntimeEvent(const QString& line) {
         if (type == "watchdog_ensure_request") handleWatchdogEnsureRequestEvent(event);
         if (type == "create_directory") handleCreateDirectoryEvent(event);
         if (type == "workflow") handleWorkflowEvent(event);
-        if (type == "required_agents") publishToUI(msg::SCRIPT_REQUIRED_AGENTS, event);
+        if (type == "required_agents") handleRequiredAgentsEvent(event);
     } catch (const std::exception& e) {
         publishLog(std::string("runtime 事件解析失败: ") + e.what(), "error", "script");
     } catch (...) {
@@ -394,17 +552,18 @@ void ScriptsActuator::handleCommandRequestEvent(const nlohmann::json& event) {
     const std::string request_id = event.value("id", event.value("request_id", std::string{}));
     const std::string cmd = event.value("cmd", std::string{});
     const int timeout_ms = jsonTimeoutMs(event);
+    const std::string priority = event.value("priority", std::string("normal"));
     bus_.publish({
         .request_id = request_id,
         .source = msg::SCRIPTS_ACTUATOR,
-        .target = msg::AGENT_MANAGER,
+        .target = priority == "high" ? msg::AGENT_MANAGER_PRIORITY : msg::AGENT_MANAGER,
         .type = msg::CMD_REQUEST,
         .payload = {
             {"request_id", request_id},
             {"agent_name", event.value("agent_name", current_agent_name_)},
             {"cmd", cmd},
             {"params", event.value("params", nlohmann::json::object())},
-            {"priority", event.value("priority", std::string("normal"))},
+            {"priority", priority},
             {"silent", event.value("silent", true)},
             {"timeout_ms", timeout_ms},
         },
@@ -520,12 +679,65 @@ void ScriptsActuator::handleWatchdogStateBusEvent(const nlohmann::json& payload)
     }
 }
 
+void ScriptsActuator::handleRequiredAgentsEvent(const nlohmann::json& event) {
+    current_script_required_agents_.clear();
+    const auto agent_names = event.find("agent_names");
+    if (agent_names != event.end() && agent_names->is_array()) {
+        for (const auto& item : *agent_names) {
+            if (item.is_string()) {
+                current_script_required_agents_.push_back(item.get<std::string>());
+            }
+        }
+    }
+    publishToUI(msg::SCRIPT_REQUIRED_AGENTS, event);
+}
+
 void ScriptsActuator::handleWorkflowEvent(const nlohmann::json& event) {
     nlohmann::json payload = event;
     if (payload.contains("steps") && payload["steps"].is_array()) {
         payload["steps_json"] = payload["steps"].dump();
     }
+    last_workflow_payload_ = payload;
     publishToUI(msg::SCRIPT_WORKFLOW, std::move(payload));
+}
+
+void ScriptsActuator::publishStopWorkflowState(bool finished, bool graceful) {
+    const auto payload = buildStopWorkflowPayload(last_workflow_payload_, finished, graceful);
+    last_workflow_payload_ = payload;
+    publishToUI(msg::SCRIPT_WORKFLOW, payload);
+}
+
+void ScriptsActuator::requestEmergencyStopForScriptAgents() {
+    std::vector<std::string> target_agents;
+    const auto add_target = [&target_agents](const std::string& agent_name) {
+        if (!isUrAgentName(agent_name)) {
+            return;
+        }
+        if (std::find(target_agents.begin(), target_agents.end(), agent_name) == target_agents.end()) {
+            target_agents.push_back(agent_name);
+        }
+    };
+
+    for (const auto& agent_name : current_script_required_agents_) {
+        add_target(agent_name);
+    }
+    if (target_agents.empty()
+        && (current_script_path_.find("record_ur_") != std::string::npos
+            || scriptReferencesUrAgent(current_script_path_))) {
+        add_target("UR_node");
+    }
+
+    for (const auto& agent_name : target_agents) {
+        bus_.publish({
+            .source = msg::SCRIPTS_ACTUATOR,
+            .target = msg::AGENT_MANAGER_PRIORITY,
+            .type = msg::ESTOP,
+            .payload = {
+                {"agent_name", agent_name},
+            },
+        });
+        publishLog("已发起机械臂急停: " + agent_name, "warning", "command");
+    }
 }
 
 void ScriptsActuator::sendRuntimeResponse(const nlohmann::json& response) {

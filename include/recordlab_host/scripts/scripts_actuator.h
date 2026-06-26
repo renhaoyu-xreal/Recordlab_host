@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace recordlab::host {
 
@@ -44,9 +45,12 @@ private:
     void handleDialogResponse(const nlohmann::json& payload);
     void handleCommandResult(const nlohmann::json& payload);
     void handleWatchdogStateBusEvent(const nlohmann::json& payload);
+    void handleRequiredAgentsEvent(const nlohmann::json& event);
     void handleWorkflowEvent(const nlohmann::json& event);
     void sendRuntimeResponse(const nlohmann::json& response);
     void publishToUI(const std::string& type, nlohmann::json payload);
+    void publishStopWorkflowState(bool finished, bool graceful);
+    void requestEmergencyStopForScriptAgents();
     void publishLog(std::string message,
                     std::string level = "info",
                     std::string log_type = "script",
@@ -70,6 +74,8 @@ private:
     long long current_script_pid_ = 0;
     std::unordered_map<std::string, nlohmann::json> latest_watchdog_state_by_agent_;
     nlohmann::json latest_node_cookie_values_ = nlohmann::json::object();
+    nlohmann::json last_workflow_payload_ = nlohmann::json::object();
+    std::vector<std::string> current_script_required_agents_;
 };
 
 }  // namespace recordlab::host

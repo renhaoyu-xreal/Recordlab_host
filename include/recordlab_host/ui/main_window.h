@@ -115,6 +115,7 @@ private:
     QString summary_data_name_;
     QString summary_request_id_;
     int summary_poll_interval_ms_ = 1000;
+    bool stop_script_requested_by_user_ = false;
 
     // ── UI ─────────────────────────────────────────────────────
     QStackedWidget* stack_ = nullptr;

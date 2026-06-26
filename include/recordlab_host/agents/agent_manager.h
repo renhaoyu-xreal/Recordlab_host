@@ -35,21 +35,44 @@ public:
     AgentConfig loadAgentConfig(const std::string& agent_name) const;
 
 private:
-    void workerLoop();
-    void handleMessage(const HostMessage& msg);
-    void doActivateAgent(const std::string& agent_name);
+    enum class WorkerLane {
+        Normal,
+        Health,
+        Priority,
+    };
+
+    struct MessageContext {
+        std::string source;
+        std::string request_id;
+    };
+
+    void workerLoop(const std::string& target, WorkerLane lane);
+    void handleMessage(const HostMessage& msg, WorkerLane lane);
+    void doActivateAgent(const std::string& agent_name, const MessageContext& context);
     void doCmdRequest(const std::string& agent_name, const std::string& cmd,
-                      const nlohmann::json& params, bool silent, int timeout_ms = 0);
+                      const nlohmann::json& params, bool silent,
+                      const MessageContext& context, int timeout_ms = 0);
+    void doHealthCmdRequest(const std::string& agent_name, const std::string& cmd,
+                            const nlohmann::json& params, bool silent,
+                            const MessageContext& context, int timeout_ms = 0);
+    void doPriorityCmdRequest(const std::string& agent_name, const std::string& cmd,
+                              const nlohmann::json& params, bool silent,
+                              const MessageContext& context, int timeout_ms = 0);
     void doLocalScriptCommand(const AgentConfig& config, const std::string& cmd,
-                              const nlohmann::json& params, bool silent);
+                              const nlohmann::json& params, bool silent,
+                              const MessageContext& context);
     void doShutdownAgent();
     void doReleaseInactiveAgents();
 
     AgentProxy* activeAgent();
     AgentProxy* findAgent(const std::string& agent_name);
     AgentProxy* ensureAgentConnected(const std::string& agent_name, int connect_timeout_ms = 0);
+    EchoActionClient* ensureHealthClient(const AgentConfig& config, int connect_timeout_ms);
+    EchoActionClient* ensurePriorityClient(const AgentConfig& config, int connect_timeout_ms);
+    void dropHealthClient(const std::string& agent_name);
+    void dropPriorityClient(const std::string& agent_name);
     AgentProxy& getOrCreateAgent(const AgentConfig& config);
-    void publishResult(const std::string& type, nlohmann::json payload);
+    void publishResult(const MessageContext& context, const std::string& type, nlohmann::json payload);
 
     HostMessageBus& bus_;
     std::string agents_config_path_;
@@ -59,12 +82,14 @@ private:
     std::string node_runtime_module_;
 
     std::unordered_map<std::string, std::unique_ptr<AgentProxy>> agents_;
+    std::unordered_map<std::string, std::unique_ptr<EchoActionClient>> health_clients_;
+    std::unordered_map<std::string, std::unique_ptr<EchoActionClient>> priority_clients_;
     std::string active_agent_;
 
     std::thread worker_;
+    std::thread health_worker_;
+    std::thread priority_worker_;
     std::atomic<bool> running_{false};
-    std::string last_source_;
-    std::string last_request_id_;
 };
 
 }  // namespace recordlab::host

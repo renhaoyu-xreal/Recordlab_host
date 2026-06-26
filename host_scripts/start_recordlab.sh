@@ -58,9 +58,9 @@ if [[ ! -x "${APP_BIN}" ]]; then
 fi
 
 echo "[recordlab] cleaning old RecordLab processes"
-pkill -x "recordlab_master_app" 2>/dev/null || true
-pkill -x "recordlab_host_app" 2>/dev/null || true
-pkill -f "[p]ython.*-m recordlab_nodes\\.core\\.node_runtime" 2>/dev/null || true
+pkill -9 -f "recordlab_master_app" 2>/dev/null || true
+pkill -9 -f "recordlab_host_app" 2>/dev/null || true
+pkill -9 -f "[p]ython.*-m recordlab_nodes\\.core\\.node_runtime" 2>/dev/null || true
 
 echo "[recordlab] starting UI"
 exec "${APP_BIN}" "${AGENTS_CONFIG}"

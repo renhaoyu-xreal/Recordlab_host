@@ -292,7 +292,7 @@ bool Watchdog::checkAgent(const std::string& agent_name, int timeout_ms, std::st
     bus_.publish({
         .request_id = request_id,
         .source = msg::WATCHDOG,
-        .target = msg::AGENT_MANAGER,
+        .target = msg::AGENT_MANAGER_HEALTH,
         .type = msg::CMD_REQUEST,
         .payload = {
             {"request_id", request_id},
@@ -377,7 +377,7 @@ AgentHealthState Watchdog::doStartDevice() {
     bus_.publish({
         .request_id = request_id,
         .source = msg::WATCHDOG,
-        .target = msg::AGENT_MANAGER,
+        .target = msg::AGENT_MANAGER_PRIORITY,
         .type = msg::CMD_REQUEST,
         .payload = {
             {"request_id", request_id},
@@ -422,7 +422,7 @@ bool Watchdog::doRecoveryReboot() {
     bus_.publish({
         .request_id = request_id,
         .source = msg::WATCHDOG,
-        .target = msg::AGENT_MANAGER,
+        .target = msg::AGENT_MANAGER_PRIORITY,
         .type = msg::CMD_REQUEST,
         .payload = {
             {"request_id", request_id},
@@ -527,7 +527,7 @@ void Watchdog::sendEstopToMonitoredAgents() {
     for (const auto& agent_name : agents) {
         bus_.publish({
             .source = msg::WATCHDOG,
-            .target = msg::AGENT_MANAGER,
+            .target = msg::AGENT_MANAGER_PRIORITY,
             .type = msg::ESTOP,
             .payload = {{"agent_name", agent_name}},
         });
@@ -545,7 +545,7 @@ void Watchdog::sendStopRecordToMonitoredAgents() {
         bus_.publish({
             .request_id = request_id,
             .source = msg::WATCHDOG,
-            .target = msg::AGENT_MANAGER,
+            .target = msg::AGENT_MANAGER_PRIORITY,
             .type = msg::CMD_REQUEST,
             .payload = {
                 {"request_id", request_id},
