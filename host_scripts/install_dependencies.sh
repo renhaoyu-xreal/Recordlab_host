@@ -22,7 +22,7 @@ install_apt_packages() {
   local python_pkg="${PYTHON_BIN}"
   local python_venv_pkg="${PYTHON_BIN}-venv"
   local python_dev_pkg="${PYTHON_BIN}-dev"
-  for cmd in git cmake pkg-config g++; do
+  for cmd in git cmake pkg-config g++ rsync; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
       missing+=("${cmd}")
     fi

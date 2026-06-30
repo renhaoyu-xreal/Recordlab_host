@@ -104,33 +104,51 @@ mkdir -p "${PACKAGE_DIR}/bin" "${DIST_ROOT}"
 copy_executable "recordlab_host_app"
 copy_executable "recordlab_cli"
 
+copy_file "CMakeLists.txt" "CMakeLists.txt"
+copy_tree "app/" "app/"
+copy_tree "include/" "include/"
+copy_tree "src/" "src/"
 copy_tree "config/" "config/"
 copy_tree "third_party/Recordlab_nodes/" "third_party/Recordlab_nodes/"
 copy_tree "third_party/echo_message_system/" "third_party/echo_message_system/"
 if [[ -d "${HOST_ROOT}/third_party/xreal_glasses" ]]; then
   copy_tree "third_party/xreal_glasses/" "third_party/xreal_glasses/"
 fi
-copy_tree "docs/" "docs/"
+copy_tree "docs/用户手册/" "docs/用户手册/"
 copy_file "README.md" "README.md"
+copy_file "host_scripts/build.sh" "host_scripts/build.sh"
 copy_file "host_scripts/install_dependencies.sh" "host_scripts/install_dependencies.sh"
 
 cat > "${PACKAGE_DIR}/bin/start_recordlab.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_ROOT="${RECORDLAB_APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 THIRD_PARTY_ROOT="${APP_ROOT}/third_party"
 ECHO_ROOT="${ECHO_MESSAGE_SYSTEM_ROOT:-${THIRD_PARTY_ROOT}/echo_message_system}"
 NODES_ROOT="${RECORDLAB_NODES_ROOT:-${THIRD_PARTY_ROOT}/Recordlab_nodes}"
 AGENTS_CONFIG="${RECORDLAB_AGENTS_CONFIG:-${NODES_ROOT}/config/agents_config.json}"
 APP_BIN="${APP_ROOT}/bin/recordlab_host_app"
+BUILD_APP_BIN="${APP_ROOT}/build/recordlab_host_app"
+BUILD_CLI_BIN="${APP_ROOT}/build/recordlab_cli"
 VENV_DIR="${RECORDLAB_VENV_DIR:-${APP_ROOT}/.venv-py310}"
 
-if [[ -x "${VENV_DIR}/bin/python" ]]; then
-  export RECORDLAB_PYTHON_BIN="${RECORDLAB_PYTHON_BIN:-${VENV_DIR}/bin/python}"
-else
-  export RECORDLAB_PYTHON_BIN="${RECORDLAB_PYTHON_BIN:-python3.10}"
-fi
+set_python_bin() {
+  if [[ -x "${VENV_DIR}/bin/python" ]]; then
+    export RECORDLAB_PYTHON_BIN="${VENV_DIR}/bin/python"
+  else
+    export RECORDLAB_PYTHON_BIN="${RECORDLAB_PYTHON_BIN:-python3.10}"
+  fi
+}
+
+sync_built_binaries() {
+  if [[ -x "${BUILD_APP_BIN}" ]]; then
+    install -Dm755 "${BUILD_APP_BIN}" "${APP_BIN}"
+  fi
+  if [[ -x "${BUILD_CLI_BIN}" ]]; then
+    install -Dm755 "${BUILD_CLI_BIN}" "${APP_ROOT}/bin/recordlab_cli"
+  fi
+}
 
 export RECORDLAB_NODES_ROOT="${NODES_ROOT}"
 export ECHO_MESSAGE_SYSTEM_ROOT="${ECHO_ROOT}"
@@ -146,16 +164,44 @@ require_path() {
   fi
 }
 
-require_path "${APP_BIN}" "recordlab_host_app"
 require_path "${NODES_ROOT}/recordlab_nodes/core/node_runtime.py" "Recordlab_nodes runtime"
 require_path "${ECHO_MESSAGE_SYSTEM_PYTHON_ROOT}/message_system" "echo_message_system Python package"
 require_path "${AGENTS_CONFIG}" "agents_config.json"
 
+set_python_bin
+sync_built_binaries
+
 if ! "${RECORDLAB_PYTHON_BIN}" -c "import recordlab_nodes, message_system" >/dev/null 2>&1; then
-  echo "[recordlab-bin] Python 依赖未就绪: ${RECORDLAB_PYTHON_BIN}" >&2
-  echo "[recordlab-bin] 可先运行 ${APP_ROOT}/host_scripts/install_dependencies.sh" >&2
+  echo "[recordlab-bin] Python 依赖未就绪，自动安装依赖"
+  "${APP_ROOT}/host_scripts/install_dependencies.sh"
+  set_python_bin
+  sync_built_binaries
+fi
+
+if ! "${RECORDLAB_PYTHON_BIN}" -c "import recordlab_nodes, message_system" >/dev/null 2>&1; then
+  echo "[recordlab-bin] Python 依赖安装失败: ${RECORDLAB_PYTHON_BIN}" >&2
   exit 1
 fi
+
+needs_rebuild=0
+if [[ ! -x "${APP_BIN}" ]]; then
+  needs_rebuild=1
+elif find \
+  "${APP_ROOT}/CMakeLists.txt" \
+  "${APP_ROOT}/app" \
+  "${APP_ROOT}/include" \
+  "${APP_ROOT}/src" \
+  -type f -newer "${APP_BIN}" | grep -q .; then
+  needs_rebuild=1
+fi
+
+if [[ "${needs_rebuild}" -eq 1 ]]; then
+  echo "[recordlab-bin] host app is missing or out of date; building now"
+  "${APP_ROOT}/host_scripts/build.sh"
+  sync_built_binaries
+fi
+
+require_path "${APP_BIN}" "recordlab_host_app"
 
 echo "[recordlab-bin] cleaning old RecordLab processes"
 pkill -x "recordlab_master_app" 2>/dev/null || true
@@ -166,12 +212,90 @@ echo "[recordlab-bin] starting UI"
 exec "${APP_BIN}" "${AGENTS_CONFIG}"
 EOF
 
+cat > "${PACKAGE_DIR}/bin/update_from_server.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_ROOT="${RECORDLAB_APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+REMOTE_HOST="${RECORDLAB_RELEASE_HOST:-nreal@10.2.11.200}"
+REMOTE_ROOT="${RECORDLAB_RELEASE_ROOT:-/home/nreal/nviz_record_data/Recordlab_host}"
+LOCK_PATH="${REMOTE_ROOT}/.publish_in_progress"
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=5)
+
+show_error_dialog() {
+  local message="$1"
+  if command -v zenity >/dev/null 2>&1; then
+    zenity --error --title="RecordLab 自动更新" --text="${message}" >/dev/null 2>&1 || true
+    return
+  fi
+  if command -v xmessage >/dev/null 2>&1; then
+    xmessage -center "${message}" >/dev/null 2>&1 || true
+    return
+  fi
+  echo "[recordlab-bin] ${message}" >&2
+}
+
+if [[ "${RECORDLAB_SKIP_AUTO_UPDATE:-0}" == "1" ]]; then
+  echo "[recordlab-bin] auto update skipped by RECORDLAB_SKIP_AUTO_UPDATE=1"
+  exit 0
+fi
+
+for cmd in ssh rsync; do
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    show_error_dialog "缺少 ${cmd}，自动更新已跳过。"
+    exit 0
+  fi
+done
+
+if ! ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" "true" >/dev/null 2>&1; then
+  show_error_dialog "无法免密连接服务器 ${REMOTE_HOST}，自动更新已跳过。"
+  exit 0
+fi
+
+if ! ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" "test -d '${REMOTE_ROOT}'" >/dev/null 2>&1; then
+  show_error_dialog "服务器目录不存在：${REMOTE_ROOT}，自动更新已跳过。"
+  exit 0
+fi
+
+if ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" "test -e '${LOCK_PATH}'" >/dev/null 2>&1; then
+  echo "[recordlab-bin] publish lock detected on server, skipping this update"
+  exit 0
+fi
+
+echo "[recordlab-bin] syncing from ${REMOTE_HOST}:${REMOTE_ROOT}"
+if ! rsync -a --delete \
+  --exclude ".venv-py310/" \
+  --exclude "logs/" \
+  --exclude "data/" \
+  --exclude ".git/" \
+  "${REMOTE_HOST}:${REMOTE_ROOT}/" "${APP_ROOT}/"; then
+  show_error_dialog "从服务器同步失败，已继续使用当前本地版本。"
+  exit 0
+fi
+EOF
+
 cat > "${PACKAGE_DIR}/RecordLabHost.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "${APP_DIR}/bin/start_recordlab.sh" "$@"
+export RECORDLAB_APP_ROOT="${APP_DIR}"
+
+TMP_UPDATE="$(mktemp "${TMPDIR:-/tmp}/recordlab_update.XXXXXX")"
+TMP_START="$(mktemp "${TMPDIR:-/tmp}/recordlab_start.XXXXXX")"
+
+cleanup() {
+  rm -f "${TMP_UPDATE}" "${TMP_START}"
+}
+trap cleanup EXIT
+
+cp "${APP_DIR}/bin/update_from_server.sh" "${TMP_UPDATE}"
+chmod +x "${TMP_UPDATE}"
+bash "${TMP_UPDATE}"
+
+cp "${APP_DIR}/bin/start_recordlab.sh" "${TMP_START}"
+chmod +x "${TMP_START}"
+bash "${TMP_START}" "$@"
 EOF
 
 cat > "${PACKAGE_DIR}/BIN_PACKAGE_README.txt" <<'EOF'
@@ -187,6 +311,9 @@ Recommended first-time setup:
 
 Start UI:
   ./RecordLabHost.sh
+
+This launcher first tries to sync from the lab server, then verifies
+dependencies/build outputs, and finally starts the UI.
 
 This package keeps the runtime resources required by RecordLab under the
 package root, while placing executable entry points in bin/.
