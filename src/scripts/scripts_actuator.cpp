@@ -260,7 +260,7 @@ ScriptsActuator::ScriptsActuator(HostMessageBus& bus, QString nodes_root,
 
 ScriptsActuator::~ScriptsActuator() {
     try {
-        doStopScript();
+        stopScriptProcess(true);
     } catch (...) {
     }
 }
@@ -447,11 +447,18 @@ void ScriptsActuator::doRunScript(const std::string& script_path, const std::str
 }
 
 void ScriptsActuator::doStopScript() {
+    stopScriptProcess(false);
+}
+
+void ScriptsActuator::stopScriptProcess(bool wait_for_exit) {
     stop_requested_ = true;
-    if (script_process_ && script_process_->state() != QProcess::NotRunning) {
-        publishStopWorkflowState(false, false);
-        requestEmergencyStopForScriptAgents();
-        script_process_->terminate();
+    if (!script_process_ || script_process_->state() == QProcess::NotRunning) {
+        return;
+    }
+    publishStopWorkflowState(false, false);
+    requestEmergencyStopForScriptAgents();
+    script_process_->terminate();
+    if (!wait_for_exit) {
         QTimer::singleShot(25000, this, [this]() {
             try {
                 if (script_process_ && script_process_->state() != QProcess::NotRunning) script_process_->kill();
@@ -462,6 +469,34 @@ void ScriptsActuator::doStopScript() {
             }
         });
         publishLog("正在停止脚本，并请求机械臂急停", "warning", "script");
+        return;
+    }
+
+    constexpr int kTerminateWaitMs = 3000;
+    constexpr int kKillWaitMs = 2000;
+    if (script_process_->waitForFinished(kTerminateWaitMs)) {
+        return;
+    }
+    common::Logger::instance().log(
+        common::LogLevel::Warn,
+        "ScriptsActuator",
+        "script did not exit after terminate; forcing kill",
+        {
+            {"script_id", current_script_id_},
+            {"script_path", current_script_path_},
+            {"pid", current_script_pid_},
+        });
+    script_process_->kill();
+    if (!script_process_->waitForFinished(kKillWaitMs)) {
+        common::Logger::instance().log(
+            common::LogLevel::Error,
+            "ScriptsActuator",
+            "script still running after kill during shutdown",
+            {
+                {"script_id", current_script_id_},
+                {"script_path", current_script_path_},
+                {"pid", current_script_pid_},
+            });
     }
 }
 

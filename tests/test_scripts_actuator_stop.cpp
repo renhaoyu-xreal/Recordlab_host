@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <signal.h>
 #include <string>
 #include <unistd.h>
 
@@ -181,6 +182,83 @@ int main(int argc, char** argv) {
     require(saw_finished, "script should finish after stop");
     require(stop_requested, "script_finished should report stop_requested");
     require(exit_code == 0 || exit_code == 130, "graceful stop should exit with code 0 or 130");
+
+    long long destroyed_process_pid = 0;
+    {
+        recordlab::host::HostMessageBus bus;
+        bus.registerConsumer(recordlab::host::msg::UI);
+        bus.registerConsumer(recordlab::host::msg::AGENT_MANAGER);
+        bus.registerConsumer(recordlab::host::msg::AGENT_MANAGER_PRIORITY);
+
+        auto scope_tmp = fs::temp_directory_path() / ("recordlab_scripts_destroy_" + std::to_string(::getpid()));
+        fs::create_directories(scope_tmp);
+        const auto scope_script = scope_tmp / "destroy_demo.py";
+        {
+            std::ofstream out(scope_script);
+            out << "import time\n";
+            out << "while True:\n";
+            out << "    time.sleep(0.2)\n";
+        }
+
+        {
+            recordlab::host::ScriptsActuator actuator(
+                bus,
+                QString::fromStdString(nodes_root.string()),
+                QString::fromStdString(echo_root.string()),
+                QString::fromStdString(agents_config.string()),
+                QString::fromLocal8Bit(qgetenv("RECORDLAB_PYTHON_BIN").isEmpty()
+                    ? QByteArray("python3")
+                    : qgetenv("RECORDLAB_PYTHON_BIN")));
+
+            bus.publish({
+                .source = recordlab::host::msg::UI,
+                .target = recordlab::host::msg::SCRIPTS_ACTUATOR,
+                .type = recordlab::host::msg::RUN_SCRIPT,
+                .payload = {
+                    {"script_path", scope_script.string()},
+                    {"agent_name", "glasses_nviz_node"},
+                },
+            });
+
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+            while (std::chrono::steady_clock::now() < deadline && destroyed_process_pid <= 0) {
+                app.processEvents(QEventLoop::AllEvents, 50);
+                for (const auto& msg : bus.drainFor(recordlab::host::msg::UI)) {
+                    if (msg.type == recordlab::host::msg::SCRIPT_STARTED) {
+                        destroyed_process_pid = msg.payload.value("pid", 0LL);
+                    }
+                }
+                for (const auto& msg : bus.drainFor(recordlab::host::msg::AGENT_MANAGER)) {
+                    if (msg.type != recordlab::host::msg::CMD_REQUEST) {
+                        continue;
+                    }
+                    bus.publish({
+                        .request_id = msg.request_id,
+                        .source = recordlab::host::msg::AGENT_MANAGER,
+                        .target = recordlab::host::msg::SCRIPTS_ACTUATOR,
+                        .type = recordlab::host::msg::CMD_RESULT,
+                        .payload = {
+                            {"request_id", msg.request_id},
+                            {"agent_name", msg.payload.value("agent_name", std::string{})},
+                            {"cmd", msg.payload.value("cmd", std::string{})},
+                            {"success", true},
+                            {"message", "ok"},
+                        },
+                    });
+                }
+                QThread::msleep(10);
+            }
+        }
+
+        require(destroyed_process_pid > 0, "destroy-time script should start");
+        const auto kill_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < kill_deadline && ::kill(static_cast<pid_t>(destroyed_process_pid), 0) == 0) {
+            QThread::msleep(50);
+        }
+        require(::kill(static_cast<pid_t>(destroyed_process_pid), 0) != 0,
+                "ScriptsActuator destruction should not leave python process running");
+        fs::remove_all(scope_tmp);
+    }
 
     std::cout << "scripts actuator stop ok\n";
     return 0;

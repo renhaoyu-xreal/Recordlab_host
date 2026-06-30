@@ -32,6 +32,7 @@ private:
     void pollBus();
     void doRunScript(const std::string& script_path, const std::string& agent_name);
     void doStopScript();
+    void stopScriptProcess(bool wait_for_exit);
     QString resolveScriptPath(const QString& script_path) const;
     void processOutputBytes(const QByteArray& data, QByteArray& buffer);
     void processOutputLine(const QString& line, const std::string& stream);
