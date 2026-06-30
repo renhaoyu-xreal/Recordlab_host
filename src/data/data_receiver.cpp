@@ -8,6 +8,11 @@
 namespace recordlab::host {
 namespace {
 
+std::string streamRegistrationKey(const DataStreamRegistration& registration) {
+    return registration.node_name + "/" + registration.data_name + "@"
+        + std::to_string(registration.port);
+}
+
 std::string describeTopics(const std::vector<DataReceiver::TopicConfig>& topics) {
     std::ostringstream oss;
     for (std::size_t i = 0; i < topics.size(); ++i) {
@@ -93,6 +98,8 @@ void DataReceiver::subscribe(const std::string& host, const std::vector<TopicCon
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<std::string> subscribed_names;
+        subscribed_names.reserve(topics.size());
         for (const auto& topic : topics) {
             auto& state = topic_states_[topic.name];
             state = {
@@ -105,7 +112,11 @@ void DataReceiver::subscribe(const std::string& host, const std::vector<TopicCon
                 true,
             };
             state.parser = createTopicParser(topic.parse_mode, topic.metadata);
+            topic_subscription_keys_[topic.name].insert(
+                "static/" + topic.name + "@" + std::to_string(topic.port));
+            subscribed_names.push_back(topic.name);
         }
+        sensor_queue_.setSubscribedNames(std::move(subscribed_names));
     }
     accepting_data_.store(true, std::memory_order_release);
 
@@ -124,15 +135,48 @@ void DataReceiver::registerDataStream(const DataStreamRegistration& registration
     if (registration.data_name.empty() || registration.port <= 0) {
         return;
     }
+    common::Logger::instance().log(
+        common::LogLevel::Info,
+        "DataReceiver",
+        "register stream data_name=" + registration.data_name +
+            " host=" + registration.host +
+            " port=" + std::to_string(registration.port) +
+            " node=" + registration.node_name +
+            " encoding=" + registration.encoding +
+            " parse_mode=" + registration.parse_mode);
     subscribeOne(registration);
 }
 
 void DataReceiver::unregisterDataStream(const DataStreamRegistration& registration) {
-    const std::string key = registration.data_name + "@" + std::to_string(registration.port);
+    if (registration.data_name.empty() || registration.port <= 0) {
+        return;
+    }
+    const std::string key = streamRegistrationKey(registration);
     std::lock_guard<std::mutex> lock(mutex_);
     dynamic_subscribers_.erase(key);
-    topic_states_.erase(registration.data_name);
-    sensor_queue_.remove(registration.data_name);
+    auto subscriptions_it = topic_subscription_keys_.find(registration.data_name);
+    bool remove_topic_state = true;
+    if (subscriptions_it != topic_subscription_keys_.end()) {
+        subscriptions_it->second.erase(key);
+        if (subscriptions_it->second.empty()) {
+            topic_subscription_keys_.erase(subscriptions_it);
+        } else {
+            remove_topic_state = false;
+        }
+    }
+    common::Logger::instance().log(
+        common::LogLevel::Info,
+        "DataReceiver",
+        "unregister stream data_name=" + registration.data_name +
+            " host=" + registration.host +
+            " port=" + std::to_string(registration.port) +
+            " node=" + registration.node_name +
+            " retained_topic_state=" + std::string(remove_topic_state ? "false" : "true"));
+    if (remove_topic_state) {
+        topic_states_.erase(registration.data_name);
+        sensor_queue_.remove(registration.data_name);
+    }
+    refreshSubscribedNamesLocked();
 }
 
 void DataReceiver::unsubscribeAll() {
@@ -140,6 +184,8 @@ void DataReceiver::unsubscribeAll() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         topic_states_.clear();
+        topic_subscription_keys_.clear();
+        sensor_queue_.setSubscribedNames({});
     }
     if (!subscribers_.empty()) {
         common::Logger::instance().log(
@@ -198,12 +244,29 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
             }
         }
         const bool topic_first = state.first_message;
+        const double receive_gap_s = topic_first
+            ? 0.0
+            : std::chrono::duration<double>(now - state.last_receive).count();
         state.first_message = false;
         state.last_receive = now;
 
         const double stream_ts = sample.timestamp_seconds;
         auto& times = state.stream_receive_times[sample.stream_key];
         is_first = topic_first || times.empty();
+        if (topic_first) {
+            common::Logger::instance().log(
+                common::LogLevel::Info,
+                "DataReceiver",
+                "first topic data received: topic=" + topic_name +
+                    " stream=" + sample.stream_key);
+        } else if (receive_gap_s >= 3.0) {
+            common::Logger::instance().log(
+                common::LogLevel::Info,
+                "DataReceiver",
+                "topic data resumed after " + std::to_string(receive_gap_s) +
+                    "s: topic=" + topic_name +
+                    " stream=" + sample.stream_key);
+        }
         if (!times.empty() && stream_ts < times.back() - 1.0) {
             times.clear();
             state.stream_frequencies_hz[sample.stream_key] = 0.0;
@@ -311,7 +374,7 @@ void DataReceiver::onTopicData(const std::string& topic_name, const nlohmann::js
 }
 
 void DataReceiver::subscribeOne(const DataStreamRegistration& registration) {
-    const std::string key = registration.data_name + "@" + std::to_string(registration.port);
+    const std::string key = streamRegistrationKey(registration);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto& state = topic_states_[registration.data_name];
@@ -323,7 +386,9 @@ void DataReceiver::subscribeOne(const DataStreamRegistration& registration) {
         state.is_cookie_topic = metadataMarksCookie(registration.metadata);
         state.first_message = true;
         state.parser = createTopicParser(registration.parse_mode, registration.metadata);
+        topic_subscription_keys_[registration.data_name].insert(key);
         dynamic_subscribers_.erase(key);
+        refreshSubscribedNamesLocked();
     }
     accepting_data_.store(true, std::memory_order_release);
     auto subscriber = std::make_unique<EchoTopicSubscriber>(
@@ -335,6 +400,17 @@ void DataReceiver::subscribeOne(const DataStreamRegistration& registration) {
         });
     std::lock_guard<std::mutex> lock(mutex_);
     dynamic_subscribers_[key] = std::move(subscriber);
+}
+
+void DataReceiver::refreshSubscribedNamesLocked() {
+    std::vector<std::string> names;
+    names.reserve(topic_subscription_keys_.size());
+    for (const auto& [topic_name, subscriptions] : topic_subscription_keys_) {
+        if (!subscriptions.empty()) {
+            names.push_back(topic_name);
+        }
+    }
+    sensor_queue_.setSubscribedNames(std::move(names));
 }
 
 nlohmann::json DataReceiver::updateCookiesLocked(const std::string& topic_name, const nlohmann::json& value) {

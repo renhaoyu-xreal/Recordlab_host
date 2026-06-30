@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -78,6 +79,7 @@ private:
 
     void onTopicData(const std::string& topic_name, const nlohmann::json& value);
     void subscribeOne(const DataStreamRegistration& registration);
+    void refreshSubscribedNamesLocked();
     nlohmann::json updateCookiesLocked(const std::string& topic_name, const nlohmann::json& value);
     nlohmann::json cookiesLocked() const;
 
@@ -86,6 +88,7 @@ private:
     std::vector<std::unique_ptr<EchoTopicSubscriber>> subscribers_;
     std::unordered_map<std::string, std::unique_ptr<EchoTopicSubscriber>> dynamic_subscribers_;
     std::unordered_map<std::string, TopicState> topic_states_;
+    std::unordered_map<std::string, std::unordered_set<std::string>> topic_subscription_keys_;
     std::unordered_map<std::string, NodeCookie> cookies_;
     mutable std::mutex mutex_;
     std::atomic<bool> accepting_data_{false};

@@ -656,7 +656,7 @@ MainWindow::MainWindow(std::string agents_config_path,
     });
     connect(workspace_page_, &WorkspacePage::backRequested, this, [this]() {
         try {
-            stack_->setCurrentWidget(entry_page_);
+            handleBackRequested();
         } catch (const std::exception& e) {
             reportQtException(QStringLiteral("backRequested"), &e);
         } catch (...) {
@@ -744,14 +744,15 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
 
     // ── AgentManager messages ──
     if (m.type == msg::CMD_RESULT) {
+        const auto cmd = m.payload.value("cmd", std::string{});
         if (handleSummaryCmdResult(m)) {
             return;
         }
-        if (isCheckCommand(m.payload.value("cmd", std::string{}))) {
+        if (isCheckCommand(cmd)) {
             return;
         }
         emit commandFinished(
-            QString::fromStdString(m.payload.value("cmd", "")),
+            QString::fromStdString(cmd),
             m.payload.value("success", false),
             QString::fromStdString(m.payload.value("message", "")));
         return;
@@ -850,6 +851,9 @@ void MainWindow::handleUIMessage(const HostMessage& m) {
         }
         if (stop_requested && has_active_agent) {
             updateSummaryPollingForActiveAgent();
+        }
+        if (stop_requested) {
+            resetSubscribedTopicViews();
         }
         const int exit_code = m.payload.value("exit_code", -1);
         const bool graceful_stop = stop_requested && (exit_code == 0 || exit_code == 130);
@@ -1078,6 +1082,53 @@ void MainWindow::handleDialogRequest(const HostMessage& m) {
 }
 
 // ── Slots ──────────────────────────────────────────────────────
+
+void MainWindow::handleBackRequested() {
+    if (script_running_) {
+        const bool already_stopping = stop_script_requested_by_user_;
+        if (!already_stopping) {
+            stopScript();
+        }
+        if (back_navigation_dialog_) {
+            back_navigation_dialog_->close();
+        }
+        auto* dialog = new QMessageBox(
+            QMessageBox::Information,
+            already_stopping ? QStringLiteral("脚本停止中") : QStringLiteral("正在停止脚本"),
+            already_stopping
+                ? QStringLiteral("脚本仍在停止中，请等待停止成功后再点击返回。")
+                : QStringLiteral("当前脚本仍在执行，已请求停止。请等待停止成功后再点击返回。"),
+            QMessageBox::Ok,
+            this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose, true);
+        back_navigation_dialog_ = dialog;
+        connect(dialog, &QObject::destroyed, this, [this]() {
+            back_navigation_dialog_.clear();
+        });
+        dialog->open();
+        return;
+    }
+    if (back_navigation_dialog_) {
+        back_navigation_dialog_->close();
+    }
+    stack_->setCurrentWidget(entry_page_);
+}
+
+void MainWindow::resetSubscribedTopicViews() {
+    if (!workspace_page_ || !data_receiver_) {
+        return;
+    }
+    for (const auto& topic_name : data_receiver_->sensorQueue().subscribedNames()) {
+        const QString name = QString::fromStdString(topic_name);
+        workspace_page_->scriptPage()->sensorWorkspace()->resetTopicData(name);
+        workspace_page_->dataPage()->sensorWorkspace()->resetTopicData(name);
+        if (name == QStringLiteral("record_timer")) {
+            emit recordTimerChanged(0.0);
+        } else if (name == QStringLiteral("time_delay")) {
+            emit timeDelayChanged(0.0);
+        }
+    }
+}
 
 void MainWindow::activateAgent(const QString& agent_name) {
     try {

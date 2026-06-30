@@ -528,9 +528,26 @@ void SensorWorkspaceWidget::resetTopicData(const QString& data_name) {
     for (const auto& label : labels_to_clear) {
         curve_history_.erase(label);
         realtime_value_lines_.erase(label);
+        smoothed_value_by_label_.erase(label);
+        labels_with_data_.erase(label);
+        const auto row_it = list_row_by_label_.find(label);
+        if (row_it != list_row_by_label_.end()) {
+            QListWidget* list = custom_data_list_;
+            const auto key_it = label_key_by_label_.find(label);
+            if (key_it != label_key_by_label_.end()
+                && channel_stream_keys_.find(key_it->second) != channel_stream_keys_.end()) {
+                list = data_selection_list_;
+            }
+            setListItemText(list, row_it->second, label, 0.0, false);
+        }
         if (selected_data_name_ == label && curve_widget_) {
             curve_widget_->clearSeries(label);
         }
+    }
+    if (data_name == QStringLiteral("motion_status") && motion_status_label_) {
+        motion_status_label_->setText(QStringLiteral("运动状态: 数据不足"));
+        motion_status_label_->setStyleSheet(QStringLiteral(
+            "QLabel { background-color: #eceff1; color: #37474f; border: 1px solid #78909c; padding: 6px; font-weight: 600; }"));
     }
     if (data_name == QStringLiteral("camera_data")) {
         last_camera_shm_seq_ = {};

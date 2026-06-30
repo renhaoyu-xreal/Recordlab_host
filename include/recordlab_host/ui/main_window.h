@@ -22,6 +22,7 @@
 
 class QStackedWidget;
 class QLabel;
+class QMessageBox;
 
 namespace recordlab::host::ui {
 
@@ -72,6 +73,8 @@ public slots:
 private:
     void loadAgents();
     void handleUIMessage(const HostMessage& msg);
+    void handleBackRequested();
+    void resetSubscribedTopicViews();
     void applyUiBindings(const std::string& topic, const nlohmann::json& value);
     QPair<QString, QString> renderNotification(const nlohmann::json& payload) const;
     void handleDialogRequest(const HostMessage& msg);
@@ -136,6 +139,7 @@ private:
     QString active_cookie_dialog_base_message_;
     QString active_cookie_dialog_agent_name_;
     QString active_cookie_dialog_card_style_;
+    QPointer<QMessageBox> back_navigation_dialog_;
 };
 
 }  // namespace recordlab::host::ui
