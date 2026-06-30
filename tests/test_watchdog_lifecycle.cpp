@@ -87,7 +87,7 @@ int main() {
             if (opt->type == msg::WATCHDOG_STATE) {
                 const auto state = opt->payload.value("state", "");
                 saw_initializing = saw_initializing || state == "INITIALIZING";
-                saw_healthy = saw_healthy || state == "HEALTHY";
+                saw_healthy = saw_healthy || (state == "HEALTHY" && opt->payload.value("device_started", false));
             } else if (opt->type == msg::LOG_ENTRY) {
                 const auto message = opt->payload.value("message", std::string{});
                 saw_start_log = saw_start_log || message.find("start_device") != std::string::npos;
@@ -293,24 +293,181 @@ int main() {
         while (std::chrono::steady_clock::now() < healthy_deadline && !saw_healthy) {
             auto item = bus.waitFor(msg::UI, 100);
             saw_healthy = item && item->type == msg::WATCHDOG_STATE &&
-                          item->payload.value("state", "") == "HEALTHY";
+                          item->payload.value("state", "") == "HEALTHY" &&
+                          item->payload.value("device_started", false) == false;
         }
         assert(saw_healthy);
 
         watchdog.setMonitoredAgents({"primary", "remote"}, true);
 
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
-        while (std::chrono::steady_clock::now() < deadline) {
-            auto stop = bus.waitFor(msg::SCRIPTS_ACTUATOR, 100);
-            assert(!stop.has_value());
-            auto request = bus.waitFor(msg::AGENT_MANAGER_HEALTH, 100);
-            if (!request) {
-                continue;
+        auto primary_script_check = waitForMatching(bus, msg::AGENT_MANAGER_HEALTH, [](const HostMessage& item) {
+            return item.type == msg::CMD_REQUEST &&
+                   item.payload.value("agent_name", std::string{}) == "primary" &&
+                   item.payload.value("cmd", std::string{}) == "check";
+        });
+        bus.publish({
+            .request_id = primary_script_check.request_id,
+            .source = msg::AGENT_MANAGER,
+            .target = msg::WATCHDOG,
+            .type = msg::CMD_RESULT,
+            .payload = {
+                {"request_id", primary_script_check.request_id},
+                {"agent_name", "primary"},
+                {"cmd", "check"},
+                {"success", true},
+                {"message", "ok"},
+            },
+        });
+
+        auto remote_script_check = waitForMatching(bus, msg::AGENT_MANAGER_HEALTH, [](const HostMessage& item) {
+            return item.type == msg::CMD_REQUEST &&
+                   item.payload.value("agent_name", std::string{}) == "remote" &&
+                   item.payload.value("cmd", std::string{}) == "check";
+        });
+        bus.publish({
+            .request_id = remote_script_check.request_id,
+            .source = msg::AGENT_MANAGER,
+            .target = msg::WATCHDOG,
+            .type = msg::CMD_RESULT,
+            .payload = {
+                {"request_id", remote_script_check.request_id},
+                {"agent_name", "remote"},
+                {"cmd", "check"},
+                {"success", false},
+                {"message", "missing"},
+            },
+        });
+
+        auto stop_script = waitForType(bus, msg::SCRIPTS_ACTUATOR, msg::STOP_SCRIPT);
+        assert(stop_script.payload.value("reason", std::string{}).find("remote") != std::string::npos);
+
+        bool saw_primary_stop_record = false;
+        bool saw_remote_stop_record = false;
+        bool saw_disconnected = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline
+               && !(saw_primary_stop_record && saw_remote_stop_record && saw_disconnected)) {
+            if (auto item = bus.waitFor(msg::AGENT_MANAGER_PRIORITY, 100)) {
+                if (item->type == msg::CMD_REQUEST
+                    && item->payload.value("cmd", std::string{}) == "stop_record") {
+                    const auto agent = item->payload.value("agent_name", std::string{});
+                    saw_primary_stop_record = saw_primary_stop_record || agent == "primary";
+                    saw_remote_stop_record = saw_remote_stop_record || agent == "remote";
+                }
             }
-            assert(request->type != msg::CMD_REQUEST ||
-                   request->payload.value("agent_name", std::string{}) != "remote" ||
-                   request->payload.value("cmd", std::string{}) != "check");
+            if (auto item = bus.waitFor(msg::UI, 10)) {
+                if (item->type == msg::WATCHDOG_STATE) {
+                    saw_disconnected = item->payload.value("state", "") == "DISCONNECTED";
+                }
+            }
         }
+        assert(saw_primary_stop_record);
+        assert(saw_remote_stop_record);
+        assert(saw_disconnected);
+
+        watchdog.stop();
+    }
+
+    {
+        HostMessageBus bus;
+        bus.registerConsumer(msg::AGENT_MANAGER);
+        bus.registerConsumer(msg::AGENT_MANAGER_HEALTH);
+        bus.registerConsumer(msg::AGENT_MANAGER_PRIORITY);
+        bus.registerConsumer(msg::SCRIPTS_ACTUATOR);
+        bus.registerConsumer(msg::UI);
+        Watchdog watchdog(bus);
+        watchdog.start();
+        watchdog.setActiveAgent("primary", false);
+
+        auto check = waitForMatching(bus, msg::AGENT_MANAGER_HEALTH, [](const HostMessage& item) {
+            return item.type == msg::CMD_REQUEST &&
+                   item.payload.value("agent_name", std::string{}) == "primary" &&
+                   item.payload.value("cmd", std::string{}) == "check";
+        });
+        bus.publish({
+            .request_id = check.request_id,
+            .source = msg::AGENT_MANAGER,
+            .target = msg::WATCHDOG,
+            .type = msg::CMD_RESULT,
+            .payload = {
+                {"request_id", check.request_id},
+                {"agent_name", "primary"},
+                {"cmd", "check"},
+                {"success", true},
+                {"message", "ok"},
+            },
+        });
+
+        auto init = waitForType(bus, msg::AGENT_MANAGER, msg::INIT_DEVICE);
+        assert(init.payload.value("agent_name", "") == "primary");
+        bus.publish({
+            .request_id = init.request_id,
+            .source = msg::AGENT_MANAGER,
+            .target = msg::WATCHDOG,
+            .type = msg::CMD_RESULT,
+            .payload = {
+                {"request_id", init.request_id},
+                {"agent_name", "primary"},
+                {"cmd", "init_device"},
+                {"success", true},
+                {"message", "ready"},
+            },
+        });
+
+        bool saw_healthy = false;
+        const auto healthy_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < healthy_deadline && !saw_healthy) {
+            auto item = bus.waitFor(msg::UI, 100);
+            saw_healthy = item && item->type == msg::WATCHDOG_STATE &&
+                          item->payload.value("state", "") == "HEALTHY" &&
+                          item->payload.value("device_started", false) == false;
+        }
+        assert(saw_healthy);
+
+        watchdog.setMonitoredAgents({"primary"}, true);
+
+        auto failed_primary_check = waitForMatching(bus, msg::AGENT_MANAGER_HEALTH, [](const HostMessage& item) {
+            return item.type == msg::CMD_REQUEST &&
+                   item.payload.value("agent_name", std::string{}) == "primary" &&
+                   item.payload.value("cmd", std::string{}) == "check";
+        });
+        bus.publish({
+            .request_id = failed_primary_check.request_id,
+            .source = msg::AGENT_MANAGER,
+            .target = msg::WATCHDOG,
+            .type = msg::CMD_RESULT,
+            .payload = {
+                {"request_id", failed_primary_check.request_id},
+                {"agent_name", "primary"},
+                {"cmd", "check"},
+                {"success", false},
+                {"message", "device missing"},
+            },
+        });
+
+        auto stop_script = waitForType(bus, msg::SCRIPTS_ACTUATOR, msg::STOP_SCRIPT);
+        assert(stop_script.payload.value("reason", std::string{}).find("primary") != std::string::npos);
+
+        bool saw_primary_stop_record = false;
+        bool saw_disconnected = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline
+               && !(saw_primary_stop_record && saw_disconnected)) {
+            if (auto item = bus.waitFor(msg::AGENT_MANAGER_PRIORITY, 100)) {
+                if (item->type == msg::CMD_REQUEST
+                    && item->payload.value("cmd", std::string{}) == "stop_record"
+                    && item->payload.value("agent_name", std::string{}) == "primary") {
+                    saw_primary_stop_record = true;
+                }
+            }
+            if (auto item = bus.waitFor(msg::UI, 10)) {
+                if (item->type == msg::WATCHDOG_STATE) {
+                    saw_disconnected = item->payload.value("state", "") == "DISCONNECTED";
+                }
+            }
+        }
+        assert(saw_primary_stop_record);
+        assert(saw_disconnected);
 
         watchdog.stop();
     }

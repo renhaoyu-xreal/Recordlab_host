@@ -89,6 +89,7 @@ private:
     std::atomic<int> init_failures_{0};
     std::atomic<bool> failure_stop_sent_{false};
     std::atomic<bool> script_monitoring_{false};
+    std::atomic<bool> device_started_{false};
     std::atomic<bool> start_pending_{false};
     std::atomic<bool> start_device_after_init_{true};
     std::string last_reason_ = "startup";

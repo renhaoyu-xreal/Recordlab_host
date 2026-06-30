@@ -74,7 +74,7 @@ int main() {
     auto localhost = loader.loadAgent("localhost");
     assert(localhost.name == "localhost");
     assert(localhost.process_type == "local_scripts");
-    assert(localhost.custom_params.value("scripts_dir", std::string{}) == "node_scripts");
+    assert(localhost.custom_params.value("scripts_dir", std::string{}) == "node_scripts/localhost");
 
     const auto tmp = hostRoot() / "build" / "test_agent_config_loader_tmp.json";
     {

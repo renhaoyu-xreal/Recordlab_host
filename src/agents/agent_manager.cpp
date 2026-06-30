@@ -44,6 +44,27 @@ nlohmann::json makeLogEntry(std::string message,
     };
 }
 
+std::filesystem::path resolveLocalScriptPath(const std::string& nodes_root,
+                                             const AgentConfig& config,
+                                             const std::string& script_name) {
+    std::filesystem::path script_path(script_name);
+    if (script_path.is_absolute()) {
+        return script_path;
+    }
+
+    const std::string scripts_dir = config.custom_params.value("scripts_dir", std::string("node_scripts"));
+    const std::vector<std::filesystem::path> candidates = {
+        std::filesystem::path(nodes_root) / scripts_dir / script_name,
+        std::filesystem::path(nodes_root) / scripts_dir / config.name / script_name,
+    };
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::exists(candidate)) {
+            return candidate;
+        }
+    }
+    return candidates.front();
+}
+
 }  // namespace
 
 AgentManager::AgentManager(HostMessageBus& bus, std::string agents_config_path,
@@ -558,11 +579,7 @@ void AgentManager::doLocalScriptCommand(const AgentConfig& config, const std::st
         return;
     }
     const std::string script_name = params.value("script", cmd);
-    const std::string scripts_dir = config.custom_params.value("scripts_dir", std::string("node_scripts"));
-    std::filesystem::path script_path(script_name);
-    if (script_path.is_relative()) {
-        script_path = std::filesystem::path(nodes_root_) / scripts_dir / script_name;
-    }
+    const std::filesystem::path script_path = resolveLocalScriptPath(nodes_root_, config, script_name);
     if (!std::filesystem::exists(script_path)) {
         publishResult(context, msg::CMD_RESULT, {
             {"agent_name", config.name},

@@ -22,12 +22,14 @@
 #include <QImage>
 #include <QLabel>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
 #include <QSpinBox>
 #include <QStatusBar>
+#include <QStackedWidget>
 #include <QTabWidget>
 #include <QTimer>
 #include <nlohmann/json.hpp>
@@ -319,6 +321,29 @@ int main(int argc, char** argv) {
     auto* command_data_group = workspace->dataPage()->findChild<QGroupBox*>("command_data_output_group");
     require(command_data_group != nullptr, "command data output group missing");
     require(command_data_group->title().startsWith(QStringLiteral("data输出目录：")), "command data group should include output path");
+    auto* back_button = workspace->findChild<QPushButton*>("back_button");
+    require(back_button != nullptr, "workspace back button missing");
+
+    window.stack_->setCurrentWidget(workspace);
+    window.script_running_ = true;
+    window.stop_script_requested_by_user_ = false;
+    back_button->click();
+    QApplication::processEvents();
+    require(window.stack_->currentWidget() == workspace,
+            "back while script is running should stay on workspace");
+    require(window.stop_script_requested_by_user_,
+            "back while script is running should request script stop");
+    require(window.back_navigation_dialog_ != nullptr,
+            "back while script is running should show a reminder dialog");
+    require(window.back_navigation_dialog_->text().contains(QStringLiteral("等待停止成功后再点击返回")),
+            "back reminder dialog should ask user to wait for stop before returning");
+
+    window.script_running_ = false;
+    window.stop_script_requested_by_user_ = false;
+    back_button->click();
+    QApplication::processEvents();
+    require(window.stack_->currentWidget() == entry,
+            "back after script stops should return to entry page");
 
     auto* script_workspace = workspace->scriptPage()->sensorWorkspace();
     workspace->configureSensorLayout(nlohmann::json{

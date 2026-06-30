@@ -37,6 +37,7 @@ void Watchdog::start() {
     consecutive_failures_ = 0;
     init_failures_ = 0;
     start_pending_ = false;
+    device_started_ = false;
     last_reason_ = "startup";
     state_ = AgentHealthState::DISCONNECTED;
     worker_ = std::thread(&Watchdog::workerLoop, this);
@@ -64,6 +65,7 @@ void Watchdog::setActiveAgent(std::string agent_name, bool start_device_after_in
     init_failures_ = 0;
     failure_stop_sent_ = false;
     script_monitoring_ = false;
+    device_started_ = false;
     start_pending_ = false;
     last_reason_ = "agent_activated";
     state_ = AgentHealthState::DISCONNECTED;
@@ -100,6 +102,7 @@ void Watchdog::clearActiveAgent() {
     init_failures_ = 0;
     failure_stop_sent_ = false;
     script_monitoring_ = false;
+    device_started_ = false;
     start_pending_ = false;
     last_reason_ = "agent_cleared";
     state_ = AgentHealthState::DISCONNECTED;
@@ -127,6 +130,7 @@ void Watchdog::workerLoop() {
             state_ = AgentHealthState::DISCONNECTED;
             consecutive_failures_ = 0;
             init_failures_ = 0;
+            device_started_ = false;
             start_pending_ = false;
             last_reason_ = "estop";
             publishState(AgentHealthState::DISCONNECTED);
@@ -228,13 +232,6 @@ void Watchdog::ensureDeviceReadyFromScript(const nlohmann::json& payload) {
 
 AgentHealthState Watchdog::doCheck() {
     const auto current_state = state_.load();
-    if (script_monitoring_ && current_state == AgentHealthState::HEALTHY) {
-        consecutive_failures_ = 0;
-        failure_stop_sent_ = false;
-        last_reason_ = "script_monitoring_health_checks_paused";
-        return AgentHealthState::HEALTHY;
-    }
-
     const auto agent_name = activeAgent();
     const auto monitored_agents = monitoredAgents();
     if (agent_name.empty() && monitored_agents.empty()) {
@@ -245,10 +242,12 @@ AgentHealthState Watchdog::doCheck() {
     std::string failure_reason;
     if (!checkAgent(primary_agent, 3000, &failure_reason)) {
         consecutive_failures_++;
+        device_started_ = false;
         last_reason_ = failure_reason;
         if (script_monitoring_) {
             last_reason_ = "script_monitoring_check_failed:" + failure_reason;
-            return current_state;
+            stopScriptAndStopRecords(last_reason_);
+            return AgentHealthState::DISCONNECTED;
         }
         return AgentHealthState::DISCONNECTED;
     }
@@ -258,10 +257,12 @@ AgentHealthState Watchdog::doCheck() {
         std::string monitored_failure;
         if (!checkAgent(monitored_agent, 3000, &monitored_failure)) {
             consecutive_failures_++;
+            device_started_ = false;
             last_reason_ = monitored_failure;
             if (script_monitoring_) {
                 last_reason_ = "script_monitoring_check_failed:" + monitored_failure;
-                return current_state;
+                stopScriptAndStopRecords(last_reason_);
+                return AgentHealthState::DISCONNECTED;
             }
             stopScriptAndStopRecords(monitored_failure);
             return AgentHealthState::DISCONNECTED;
@@ -358,6 +359,7 @@ AgentHealthState Watchdog::doInitDevice() {
 
     init_failures_ = 0;
     consecutive_failures_ = 0;
+    device_started_ = false;
     start_pending_ = start_device_after_init_.load();
     last_reason_ = "init_device_succeeded";
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
@@ -404,6 +406,7 @@ AgentHealthState Watchdog::doStartDevice() {
     }
 
     consecutive_failures_ = 0;
+    device_started_ = true;
     last_reason_ = "start_device_succeeded";
     publishUiLog("start_device: " + opt->payload.value("message", std::string{}), "success", "command");
     common::Logger::instance().log(common::LogLevel::Info, "Watchdog",
@@ -503,6 +506,8 @@ void Watchdog::publishState(AgentHealthState state, const nlohmann::json& extra)
         {"agent_name", activeAgent()},
         {"monitored_agents", monitored},
         {"state", ::recordlab::host::to_string(state)},
+        {"device_started", device_started_.load()},
+        {"start_pending", start_pending_.load()},
         {"reason", last_reason_},
         {"consecutive_failures", consecutive_failures_.load()},
         {"init_failures", init_failures_.load()},
