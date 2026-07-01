@@ -3,8 +3,8 @@ set -euo pipefail
 
 HOST_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 THIRD_PARTY_ROOT="${HOST_ROOT}/third_party"
-ECHO_REPO_URL="${ECHO_MESSAGE_SYSTEM_REPO_URL:-https://github.com/renhaoyu-xreal/echo_message_system.git}"
-NODES_REPO_URL="${RECORDLAB_NODES_REPO_URL:-https://github.com/renhaoyu-xreal/Recordlab_nodes.git}"
+ECHO_REPO_URL="${ECHO_MESSAGE_SYSTEM_REPO_URL:-https://github.com/nreal-zhouping/echo_message_system_v2.git}"
+NODES_REPO_URL="${RECORDLAB_NODES_REPO_URL:-https://github.com/nreal-zhouping/Recordlab_nodes.git}"
 ECHO_ROOT="${THIRD_PARTY_ROOT}/echo_message_system"
 NODES_ROOT="${THIRD_PARTY_ROOT}/Recordlab_nodes"
 VENV_DIR="${RECORDLAB_VENV_DIR:-${HOST_ROOT}/.venv-py310}"
