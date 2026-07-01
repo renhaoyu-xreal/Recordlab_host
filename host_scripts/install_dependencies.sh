@@ -63,7 +63,6 @@ install_apt_packages() {
     libqt6opengl6-dev \
     libgl-dev \
     libzmq3-dev \
-    cppzmq-dev \
     python3-pip; do
     if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
       missing+=("${pkg}")
@@ -109,7 +108,7 @@ check_zmq_hpp() {
   done
 
   echo "[recordlab] missing C++ ZeroMQ header zmq.hpp." >&2
-  echo "[recordlab] install it with: sudo apt-get install -y cppzmq-dev" >&2
+  echo "[recordlab] install it with: sudo apt-get install -y libzmq3-dev" >&2
   return 1
 }
 

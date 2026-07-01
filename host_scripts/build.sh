@@ -30,7 +30,7 @@ require_zmq_hpp() {
   done
 
   echo "[build] missing C++ ZeroMQ header zmq.hpp" >&2
-  echo "[build] run host_scripts/install_dependencies.sh first, or install cppzmq-dev manually" >&2
+  echo "[build] run host_scripts/install_dependencies.sh first, or install libzmq3-dev manually" >&2
   exit 1
 }
 
