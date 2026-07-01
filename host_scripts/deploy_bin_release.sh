@@ -79,6 +79,7 @@ fi
 verify_package_path "RecordLabHost.sh"
 verify_package_path "bin/start_recordlab.sh"
 verify_package_path "host_scripts/install_dependencies.sh"
+verify_package_path "config/release_stamp.txt"
 verify_package_path "include/recordlab_host/data/camera_shared_memory.h"
 verify_package_path "third_party/Recordlab_nodes/recordlab_nodes/core/node_runtime.py"
 
