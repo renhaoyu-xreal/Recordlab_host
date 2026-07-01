@@ -363,7 +363,15 @@ QComboBox* createHistoryComboBox(QWidget* parent,
     auto* combo = new QComboBox(parent);
     combo->setEditable(!has_choices);
     combo->setInsertPolicy(QComboBox::NoInsert);
-    const QStringList history_values = loadFormHistory(history_scope);
+    QStringList history_values = loadFormHistory(history_scope);
+    if (has_choices) {
+        history_values.erase(
+            std::remove_if(
+                history_values.begin(),
+                history_values.end(),
+                [&choices](const QString& value) { return !choices.contains(value); }),
+            history_values.end());
+    }
     const QString effective_default = !history_values.isEmpty() ? history_values.front() : default_value;
     combo->addItems(mergeHistoryAndChoices(history_values, choices, effective_default));
     if (combo->isEditable()) {
