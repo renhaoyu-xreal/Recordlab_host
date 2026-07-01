@@ -13,6 +13,17 @@ PYTHON_BIN="${PYTHON_BIN:-python3.10}"
 echo "[recordlab] dependency bootstrap"
 echo "[recordlab] host root: ${HOST_ROOT}"
 
+cmake_clean_env() {
+  env \
+    -u QT_HOST_PATH \
+    -u QT_HOST_PATH_CMAKE_DIR \
+    -u Qt6_DIR \
+    -u Qt6Widgets_DIR \
+    -u Qt6Core_DIR \
+    -u Qt6Gui_DIR \
+    "$@"
+}
+
 install_apt_packages() {
   if ! command -v apt-get >/dev/null 2>&1; then
     return
@@ -111,12 +122,13 @@ project(recordlab_qt_check LANGUAGES CXX)
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 EOF
 
-  if cmake -S "${tmp_dir}" -B "${tmp_dir}/build" >/dev/null 2>"${tmp_dir}/cmake.err"; then
+  if cmake_clean_env cmake -S "${tmp_dir}" -B "${tmp_dir}/build" >/dev/null 2>"${tmp_dir}/cmake.err"; then
     rm -rf "${tmp_dir}"
     return 0
   fi
 
   echo "[recordlab] Qt6 Widgets CMake package is not usable on this machine." >&2
+  echo "[recordlab] sanitized env: QT_HOST_PATH='${QT_HOST_PATH:-}', QT_HOST_PATH_CMAKE_DIR='${QT_HOST_PATH_CMAKE_DIR:-}', Qt6_DIR='${Qt6_DIR:-}'" >&2
   echo "[recordlab] install/fix it with: sudo apt-get install -y qt6-base-dev qt6-base-dev-tools libqt6opengl6-dev libgl-dev" >&2
   sed -n '1,80p' "${tmp_dir}/cmake.err" >&2 || true
   rm -rf "${tmp_dir}"
