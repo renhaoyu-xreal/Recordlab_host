@@ -56,23 +56,26 @@ require_path() {
 copy_tree() {
   local src_rel="$1"
   local dst_rel="$2"
+  shift 2
   require_path "${HOST_ROOT}/${src_rel}"
   mkdir -p "$(dirname "${PACKAGE_DIR}/${dst_rel}")"
   rsync -a --delete \
     --exclude ".git/" \
     --exclude "__pycache__/" \
     --exclude "*.pyc" \
+    --exclude "*.egg-info/" \
+    --exclude "*.dist-info/" \
     --exclude ".pytest_cache/" \
     --exclude ".venv/" \
     --exclude ".venv-*/" \
     --exclude "build/" \
     --exclude "dist/" \
-    --exclude "data/" \
     --exclude "log/" \
     --exclude "logs/" \
     --exclude "*.log" \
     --exclude "*.log.*" \
     --exclude "nrsensor_*.txt" \
+    "$@" \
     "${HOST_ROOT}/${src_rel}" "${PACKAGE_DIR}/${dst_rel}"
 }
 
@@ -87,6 +90,14 @@ copy_executable() {
   local name="$1"
   require_path "${BUILD_DIR}/${name}"
   install -Dm755 "${BUILD_DIR}/${name}" "${PACKAGE_DIR}/bin/${name}"
+}
+
+verify_packaged_path() {
+  local rel_path="$1"
+  if [[ ! -e "${PACKAGE_DIR}/${rel_path}" ]]; then
+    echo "Packaged output is incomplete, missing: ${PACKAGE_DIR}/${rel_path}" >&2
+    exit 1
+  fi
 }
 
 if ! command -v rsync >/dev/null 2>&1; then
@@ -116,7 +127,7 @@ copy_tree "app/" "app/"
 copy_tree "include/" "include/"
 copy_tree "src/" "src/"
 copy_tree "config/" "config/"
-copy_tree "third_party/Recordlab_nodes/" "third_party/Recordlab_nodes/"
+copy_tree "third_party/Recordlab_nodes/" "third_party/Recordlab_nodes/" --exclude "/data/"
 copy_tree "third_party/echo_message_system/" "third_party/echo_message_system/"
 if [[ -d "${HOST_ROOT}/third_party/xreal_glasses" ]]; then
   copy_tree "third_party/xreal_glasses/" "third_party/xreal_glasses/"
@@ -272,8 +283,13 @@ fi
 echo "[recordlab-bin] syncing from ${REMOTE_HOST}:${REMOTE_ROOT}"
 if ! rsync -a --delete \
   --exclude ".venv-py310/" \
+  --exclude "build/" \
+  --exclude ".recordlab-build/" \
   --exclude "logs/" \
-  --exclude "data/" \
+  --exclude "/data/" \
+  --exclude "/third_party/Recordlab_nodes/data/" \
+  --exclude "*.egg-info/" \
+  --exclude "*.dist-info/" \
   --exclude ".git/" \
   "${REMOTE_HOST}:${REMOTE_ROOT}/" "${APP_ROOT}/"; then
   show_error_dialog "从服务器同步失败，已继续使用当前本地版本。"
@@ -325,6 +341,14 @@ dependencies/build outputs, and finally starts the UI.
 This package keeps the runtime resources required by RecordLab under the
 package root, while placing executable entry points in bin/.
 EOF
+
+verify_packaged_path "RecordLabHost.sh"
+verify_packaged_path "bin/start_recordlab.sh"
+verify_packaged_path "host_scripts/install_dependencies.sh"
+verify_packaged_path "host_scripts/build.sh"
+verify_packaged_path "include/recordlab_host/data/camera_shared_memory.h"
+verify_packaged_path "src/data/camera_shared_memory.cpp"
+verify_packaged_path "third_party/Recordlab_nodes/recordlab_nodes/core/node_runtime.py"
 
 find "${PACKAGE_DIR}" -type f -name "*.sh" -exec chmod +x {} \;
 tar -C "${DIST_ROOT}" -czf "${ARCHIVE_PATH}" "${PACKAGE_NAME}"

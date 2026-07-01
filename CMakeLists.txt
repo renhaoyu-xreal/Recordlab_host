@@ -100,33 +100,43 @@ target_link_libraries(recordlab_cli PRIVATE recordlab_host)
 add_executable(recordlab_host_app app/recordlab_host_app.cpp)
 target_link_libraries(recordlab_host_app PRIVATE recordlab_host)
 
-enable_testing()
+include(CTest)
 
-foreach(test_name
-  test_agent_config_loader
-  test_agent_manager_proxy_integration
-  test_camera_shared_memory_reader
-  test_data_receiver_streams
-  test_data_registry_server
-  test_echo_topic_encoding
-  test_host_message_bus
-  test_logger_context
-  test_process_handle
-  test_runtime_config
-  test_scripts_actuator_lifecycle
-  test_scripts_actuator_stop
-  test_sensor_queue
-  test_watchdog_lifecycle
-  test_echo_python_integration
-  test_ui_layout_contract
-  test_virtual_node_config_manager
-  test_watchdog_state_machine
-)
-  add_executable(${test_name} tests/${test_name}.cpp)
-  target_link_libraries(${test_name} PRIVATE recordlab_host)
-  add_test(NAME ${test_name} COMMAND ${test_name})
-endforeach()
+if(BUILD_TESTING)
+  foreach(test_name
+    test_agent_config_loader
+    test_agent_manager_proxy_integration
+    test_camera_shared_memory_reader
+    test_data_receiver_streams
+    test_data_registry_server
+    test_echo_topic_encoding
+    test_host_message_bus
+    test_logger_context
+    test_process_handle
+    test_runtime_config
+    test_scripts_actuator_lifecycle
+    test_scripts_actuator_stop
+    test_sensor_queue
+    test_watchdog_lifecycle
+    test_echo_python_integration
+    test_ui_layout_contract
+    test_virtual_node_config_manager
+    test_watchdog_state_machine
+  )
+    set(test_source "${CMAKE_CURRENT_SOURCE_DIR}/tests/${test_name}.cpp")
+    if(NOT EXISTS "${test_source}")
+      message(WARNING "Skipping missing test source: ${test_source}")
+      continue()
+    endif()
 
-set_tests_properties(test_ui_layout_contract PROPERTIES
-  ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-)
+    add_executable(${test_name} "${test_source}")
+    target_link_libraries(${test_name} PRIVATE recordlab_host)
+    add_test(NAME ${test_name} COMMAND ${test_name})
+  endforeach()
+
+  if(TARGET test_ui_layout_contract)
+    set_tests_properties(test_ui_layout_contract PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+  endif()
+endif()

@@ -10,6 +10,12 @@ NODES_ROOT="${THIRD_PARTY_ROOT}/Recordlab_nodes"
 VENV_DIR="${RECORDLAB_VENV_DIR:-${HOST_ROOT}/.venv-py310}"
 PYTHON_BIN="${PYTHON_BIN:-python3.10}"
 
+if [[ "${EUID}" -eq 0 ]]; then
+  echo "[recordlab] do not run host_scripts/install_dependencies.sh with sudo." >&2
+  echo "[recordlab] run it as your normal user; the script will call sudo itself for apt-get when needed." >&2
+  exit 1
+fi
+
 echo "[recordlab] dependency bootstrap"
 echo "[recordlab] host root: ${HOST_ROOT}"
 
@@ -139,6 +145,59 @@ validate_system_dependencies() {
   check_qt6_widgets
 }
 
+ensure_python_package_source_writable() {
+  local dir="$1"
+
+  if [[ ! -d "${dir}" ]]; then
+    return 0
+  fi
+
+  chmod -R u+rwX "${dir}" 2>/dev/null || true
+  find "${dir}" -maxdepth 2 \( -name "*.egg-info" -o -name "*.dist-info" \) -exec rm -rf {} + 2>/dev/null || true
+}
+
+can_use_editable_install() {
+  local path="$1"
+
+  if [[ ! -d "${path}" ]] || [[ ! -w "${path}" ]]; then
+    return 1
+  fi
+
+  if find "${path}" -maxdepth 2 \( -name "*.egg-info" -o -name "*.dist-info" \) | grep -q .; then
+    return 1
+  fi
+
+  return 0
+}
+
+install_local_python_package() {
+  local label="$1"
+  local path="$2"
+
+  ensure_python_package_source_writable "${path}"
+
+  if can_use_editable_install "${path}"; then
+    if "${RECORDLAB_PYTHON_BIN}" -m pip install -e "${path}"; then
+      return 0
+    fi
+
+    echo "[recordlab] editable install failed for ${label}, retrying from a temporary copy"
+  else
+    echo "[recordlab] source tree for ${label} is not safe for editable install, using a temporary copy"
+  fi
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  rsync -a \
+    --delete \
+    --exclude ".git/" \
+    --exclude "__pycache__/" \
+    --exclude "*.pyc" \
+    "${path}/" "${tmp_dir}/src/"
+  "${RECORDLAB_PYTHON_BIN}" -m pip install "${tmp_dir}/src"
+  rm -rf "${tmp_dir}"
+}
+
 install_apt_packages
 mkdir -p "${THIRD_PARTY_ROOT}"
 clone_or_update "${ECHO_REPO_URL}" "${ECHO_ROOT}"
@@ -175,12 +234,12 @@ RECORDLAB_PYTHON_BIN="${VENV_DIR}/bin/python"
 
 if [[ -f "${ECHO_ROOT}/python/setup.py" ]]; then
   echo "[recordlab] installing echo_message_system Python package"
-  "${RECORDLAB_PYTHON_BIN}" -m pip install -e "${ECHO_ROOT}/python"
+  install_local_python_package "echo_message_system" "${ECHO_ROOT}/python"
 fi
 
 if [[ -f "${NODES_ROOT}/pyproject.toml" ]]; then
   echo "[recordlab] installing Recordlab_nodes Python package"
-  "${RECORDLAB_PYTHON_BIN}" -m pip install -e "${NODES_ROOT}"
+  install_local_python_package "Recordlab_nodes" "${NODES_ROOT}"
 fi
 
 XREAL_WHL="${THIRD_PARTY_ROOT}/xreal_glasses/xreal_glasses-0.4.3-py3-none-any.whl"
@@ -199,4 +258,4 @@ fi
 echo "[recordlab] configuring and building host"
 bash "${HOST_ROOT}/host_scripts/build.sh"
 
-echo "[recordlab] done. Start UI with host_scripts/start_recordlab.sh"
+echo "[recordlab] done. Start UI with ./RecordLabHost.sh"

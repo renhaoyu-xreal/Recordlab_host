@@ -45,6 +45,15 @@ require_cmd() {
   fi
 }
 
+verify_package_path() {
+  local rel_path="$1"
+  if [[ ! -e "${PACKAGE_DIR}/${rel_path}" ]]; then
+    echo "Package is incomplete, missing: ${PACKAGE_DIR}/${rel_path}" >&2
+    echo "Re-run ./host_scripts/package_bin_release.sh before deploy." >&2
+    exit 1
+  fi
+}
+
 remote_ssh() {
   sshpass -p "${REMOTE_PASSWORD}" ssh "${REMOTE_HOST}" "$@"
 }
@@ -66,6 +75,12 @@ if [[ ! -d "${PACKAGE_DIR}" ]]; then
   echo "Missing package directory: ${PACKAGE_DIR}" >&2
   exit 1
 fi
+
+verify_package_path "RecordLabHost.sh"
+verify_package_path "bin/start_recordlab.sh"
+verify_package_path "host_scripts/install_dependencies.sh"
+verify_package_path "include/recordlab_host/data/camera_shared_memory.h"
+verify_package_path "third_party/Recordlab_nodes/recordlab_nodes/core/node_runtime.py"
 
 echo "[deploy] ensuring remote release directory exists"
 remote_ssh "mkdir -p '${REMOTE_ROOT}' && : > '${LOCK_PATH}'"
