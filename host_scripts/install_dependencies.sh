@@ -30,6 +30,86 @@ cmake_clean_env() {
     "$@"
 }
 
+DISABLED_APT_SOURCE_FILES=()
+
+list_optional_apt_sources() {
+  find /etc/apt/sources.list.d \
+    -maxdepth 1 \
+    \( -name "*.list" -o -name "*.sources" \) \
+    -print 2>/dev/null | sort
+}
+
+restore_disabled_apt_sources() {
+  local original
+  local disabled_path
+  for original in "${DISABLED_APT_SOURCE_FILES[@]}"; do
+    disabled_path="${original}.recordlab-disabled"
+    if sudo test -e "${disabled_path}"; then
+      sudo mv "${disabled_path}" "${original}"
+    fi
+  done
+  DISABLED_APT_SOURCE_FILES=()
+}
+
+disable_optional_apt_sources() {
+  local file
+  local disabled_any=0
+  while IFS= read -r file; do
+    [[ -n "${file}" ]] || continue
+    sudo mv "${file}" "${file}.recordlab-disabled"
+    DISABLED_APT_SOURCE_FILES+=("${file}")
+    disabled_any=1
+  done < <(list_optional_apt_sources)
+
+  if [[ "${disabled_any}" -eq 1 ]]; then
+    echo "[recordlab] detected broken third-party apt sources; temporarily disabling /etc/apt/sources.list.d entries"
+    return 0
+  fi
+
+  return 1
+}
+
+apt_output_needs_fallback() {
+  local log_file="$1"
+  grep -Eqi \
+    'certificate verification failed|could not handshake|部分索引文件下载失败|some index files failed to download|failed to fetch|no_pubkey|the repository .* is not signed' \
+    "${log_file}"
+}
+
+run_apt_update() {
+  local first_log
+  local update_status=0
+  first_log="$(mktemp)"
+
+  if sudo apt-get update >"${first_log}" 2>&1; then
+    if ! apt_output_needs_fallback "${first_log}"; then
+      cat "${first_log}"
+      rm -f "${first_log}"
+      return 0
+    fi
+  else
+    update_status=$?
+  fi
+
+  if ! disable_optional_apt_sources; then
+    cat "${first_log}"
+    rm -f "${first_log}"
+    return "${update_status}"
+  fi
+
+  local retry_log
+  retry_log="$(mktemp)"
+  if sudo apt-get update >"${retry_log}" 2>&1; then
+    cat "${retry_log}"
+    rm -f "${first_log}" "${retry_log}"
+    return 0
+  fi
+
+  cat "${retry_log}" >&2
+  rm -f "${first_log}" "${retry_log}"
+  return 1
+}
+
 install_apt_packages() {
   if ! command -v apt-get >/dev/null 2>&1; then
     return
@@ -80,8 +160,21 @@ install_apt_packages() {
   fi
 
   echo "[recordlab] installing system packages: ${missing[*]}"
-  sudo apt-get update
-  sudo apt-get install -y "${missing[@]}"
+  if ! run_apt_update; then
+    restore_disabled_apt_sources
+    return 1
+  fi
+
+  local install_status=0
+  if ! sudo apt-get install -y "${missing[@]}"; then
+    install_status=$?
+  fi
+
+  restore_disabled_apt_sources
+
+  if [[ "${install_status}" -ne 0 ]]; then
+    return "${install_status}"
+  fi
 }
 
 clone_or_update() {
