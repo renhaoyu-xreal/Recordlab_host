@@ -46,13 +46,18 @@ install_apt_packages() {
     missing+=("${python_dev_pkg}")
   fi
 
-  if ! dpkg -s qt6-base-dev >/dev/null 2>&1; then
-    missing+=("qt6-base-dev")
-  fi
-
-  if ! dpkg -s python3-pip >/dev/null 2>&1; then
-    missing+=("python3-pip")
-  fi
+  for pkg in \
+    qt6-base-dev \
+    qt6-base-dev-tools \
+    libqt6opengl6-dev \
+    libgl-dev \
+    libzmq3-dev \
+    cppzmq-dev \
+    python3-pip; do
+    if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
+      missing+=("${pkg}")
+    fi
+  done
 
   if ((${#missing[@]} == 0)); then
     return
@@ -79,10 +84,55 @@ clone_or_update() {
   git clone "${url}" "${dir}"
 }
 
+check_zmq_hpp() {
+  local candidates=(
+    "${ECHO_ROOT}/cpp-refactor/external/zeromq/include/zmq.hpp"
+    "/usr/include/zmq.hpp"
+    "/usr/local/include/zmq.hpp"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "${candidate}" ]]; then
+      return 0
+    fi
+  done
+
+  echo "[recordlab] missing C++ ZeroMQ header zmq.hpp." >&2
+  echo "[recordlab] install it with: sudo apt-get install -y cppzmq-dev" >&2
+  return 1
+}
+
+check_qt6_widgets() {
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  cat > "${tmp_dir}/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.16)
+project(recordlab_qt_check LANGUAGES CXX)
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+EOF
+
+  if cmake -S "${tmp_dir}" -B "${tmp_dir}/build" >/dev/null 2>"${tmp_dir}/cmake.err"; then
+    rm -rf "${tmp_dir}"
+    return 0
+  fi
+
+  echo "[recordlab] Qt6 Widgets CMake package is not usable on this machine." >&2
+  echo "[recordlab] install/fix it with: sudo apt-get install -y qt6-base-dev qt6-base-dev-tools libqt6opengl6-dev libgl-dev" >&2
+  sed -n '1,80p' "${tmp_dir}/cmake.err" >&2 || true
+  rm -rf "${tmp_dir}"
+  return 1
+}
+
+validate_system_dependencies() {
+  check_zmq_hpp
+  check_qt6_widgets
+}
+
 install_apt_packages
 mkdir -p "${THIRD_PARTY_ROOT}"
 clone_or_update "${ECHO_REPO_URL}" "${ECHO_ROOT}"
 clone_or_update "${NODES_REPO_URL}" "${NODES_ROOT}"
+validate_system_dependencies
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   echo "[recordlab] ${PYTHON_BIN} is required. Install it or run with PYTHON_BIN=/path/to/python3.10." >&2
@@ -136,9 +186,6 @@ if [[ ! -f "${ECHO_ROOT}/cpp-refactor/external/zeromq/lib/libzmq.a" ]]; then
 fi
 
 echo "[recordlab] configuring and building host"
-cmake -S "${HOST_ROOT}" -B "${HOST_ROOT}/build" \
-  -DRECORDLAB_THIRD_PARTY_DIR="${THIRD_PARTY_ROOT}" \
-  -DECHO_MESSAGE_SYSTEM_ROOT="${ECHO_ROOT}"
-cmake --build "${HOST_ROOT}/build" -j"$(nproc)"
+bash "${HOST_ROOT}/host_scripts/build.sh"
 
 echo "[recordlab] done. Start UI with host_scripts/start_recordlab.sh"

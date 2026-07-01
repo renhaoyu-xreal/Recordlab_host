@@ -72,6 +72,7 @@ copy_tree() {
     --exclude "logs/" \
     --exclude "*.log" \
     --exclude "*.log.*" \
+    --exclude "nrsensor_*.txt" \
     "${HOST_ROOT}/${src_rel}" "${PACKAGE_DIR}/${dst_rel}"
 }
 
@@ -179,7 +180,7 @@ sync_built_binaries
 
 if ! "${RECORDLAB_PYTHON_BIN}" -c "import recordlab_nodes, message_system" >/dev/null 2>&1; then
   echo "[recordlab-bin] Python 依赖未就绪，自动安装依赖"
-  "${APP_ROOT}/host_scripts/install_dependencies.sh"
+  bash "${APP_ROOT}/host_scripts/install_dependencies.sh"
   set_python_bin
   sync_built_binaries
 fi
@@ -202,8 +203,8 @@ elif find \
 fi
 
 if [[ "${needs_rebuild}" -eq 1 ]]; then
-  echo "[recordlab-bin] host app is missing or out of date; building now"
-  "${APP_ROOT}/host_scripts/build.sh"
+  echo "[recordlab-bin] host app is missing or out of date; installing prerequisites and building now"
+  bash "${APP_ROOT}/host_scripts/install_dependencies.sh"
   sync_built_binaries
 fi
 
