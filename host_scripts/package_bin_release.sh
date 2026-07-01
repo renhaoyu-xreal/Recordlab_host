@@ -7,6 +7,7 @@ DIST_ROOT="${HOST_ROOT}/dist"
 PACKAGE_NAME="RecordLabHostBin"
 PACKAGE_DIR="${DIST_ROOT}/${PACKAGE_NAME}"
 ARCHIVE_PATH="${DIST_ROOT}/${PACKAGE_NAME}-linux-x86_64.tar.gz"
+OLD_VIDEO_REL="third_party/Recordlab_nodes/node_scripts/localhost/old_video.mp4"
 
 SKIP_BUILD=0
 CLEAN_DIST=1
@@ -100,6 +101,11 @@ if [[ "${CLEAN_DIST}" == "1" ]]; then
   rm -rf "${PACKAGE_DIR}"
 fi
 mkdir -p "${PACKAGE_DIR}/bin" "${DIST_ROOT}"
+
+if [[ ! -f "${HOST_ROOT}/${OLD_VIDEO_REL}" ]]; then
+  echo "[recordlab] warning: missing optional asset ${OLD_VIDEO_REL}" >&2
+  echo "[recordlab] warning: old_video.mp4 is not tracked by git; copy it into node_scripts/localhost before packaging if the release needs local video playback." >&2
+fi
 
 copy_executable "recordlab_host_app"
 copy_executable "recordlab_cli"

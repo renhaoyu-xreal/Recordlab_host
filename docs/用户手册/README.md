@@ -4,12 +4,12 @@
 
 建议阅读顺序：
 
-1. [01_程序启动与基础使用.md](/home/hyren/Recordlab_host/docs/用户手册/01_程序启动与基础使用.md)
-2. [02_NViz使用手册.md](/home/hyren/Recordlab_host/docs/用户手册/02_NViz使用手册.md)
-3. [03_BSP使用手册.md](/home/hyren/Recordlab_host/docs/用户手册/03_BSP使用手册.md)
-4. [04_MCU使用手册.md](/home/hyren/Recordlab_host/docs/用户手册/04_MCU使用手册.md)
-5. [05_Android使用手册.md](/home/hyren/Recordlab_host/docs/用户手册/05_Android使用手册.md)
-6. [06_Nebula使用手册.md](/home/hyren/Recordlab_host/docs/用户手册/06_Nebula使用手册.md)
+1. [01_程序启动与基础使用.md](01_程序启动与基础使用.md)
+2. [02_NViz使用手册.md](02_NViz使用手册.md)
+3. [03_BSP使用手册.md](03_BSP使用手册.md)
+4. [04_MCU使用手册.md](04_MCU使用手册.md)
+5. [05_Android使用手册.md](05_Android使用手册.md)
+6. [06_Nebula使用手册.md](06_Nebula使用手册.md)
 
 说明：
 
